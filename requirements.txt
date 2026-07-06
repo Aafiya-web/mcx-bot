@@ -1,0 +1,7 @@
+# Step 1 (Foundation) — more added as later build steps need them:
+#   step 2: smartapi-python pyotp        (broker)
+#   step 3: pandas numpy                 (data + indicators)
+#   step 10: Flask                       (dashboard)
+requests>=2.31
+python-dotenv>=1.0
+pytest>=8.0
