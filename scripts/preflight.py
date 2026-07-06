@@ -62,12 +62,31 @@ def main() -> int:
     # 3. Telegram
     print(f"Telegram        : {'configured' if telegram.enabled() else 'disabled (no token — OK for paper)'}")
 
-    # 4. Broker credentials (informational until step 2 wires the broker)
+    # 4. Economic calendar: which source is live? (fallback never fails,
+    #    so this cannot break paper mode — but a silent fallback while a
+    #    FINNHUB_API_KEY is configured is worth failing loudly over.)
+    try:
+        from data.economic_calendar import EconomicCalendar
+        cal = EconomicCalendar()
+        events = cal.refresh()
+        note = f"{cal.source} ({len(events)} relevant event(s) fetched)"
+        if settings.FINNHUB_API_KEY and cal.source != "finnhub":
+            failures.append("Calendar: FINNHUB_API_KEY is set but the "
+                            "static fallback was used — check the key/plan")
+            note += " — FELL BACK despite configured key!"
+        elif not settings.FINNHUB_API_KEY:
+            note += " — no FINNHUB_API_KEY, static fallback is expected"
+        print(f"Calendar source : {note}")
+    except Exception as e:
+        failures.append(f"Calendar: {e}")
+        print(f"Calendar source : FAIL — {e}")
+
+    # 5. Broker credentials (informational; LiveFeed needs them, paper doesn't)
     creds = all([settings.ANGEL_API_KEY, settings.ANGEL_CLIENT_ID,
                  settings.ANGEL_PASSWORD, settings.ANGEL_TOTP_KEY])
     print(f"Angel One creds : {'present' if creds else 'absent (mock/paper data only)'}")
 
-    # 5. Instrument lineup
+    # 6. Instrument lineup
     print(f"Mini contracts  : {'ON' if symbols.USE_MINI_CONTRACTS else 'off'}")
     print("-" * 58)
     print(f"{'INSTRUMENT':<12} {'TRADES AS':<13} {'STRATEGY':<22} {'TF':<15} CLUSTER")
