@@ -1,7 +1,10 @@
-# Step 1 (Foundation) — more added as later build steps need them:
-#   step 2: smartapi-python pyotp        (broker)
-#   step 3: pandas numpy                 (data + indicators)
-#   step 10: Flask                       (dashboard)
+# Core (paper mode runs with just these):
 requests>=2.31
 python-dotenv>=1.0
 pytest>=8.0
+pandas>=2.2
+numpy>=1.26
+
+# Live broker connectivity only (not needed for paper/mock):
+#   pip install smartapi-python pyotp
+# Dashboard (added at step 10): Flask
