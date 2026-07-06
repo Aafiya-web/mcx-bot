@@ -64,6 +64,13 @@ ANGEL_TOTP_KEY = os.getenv("ANGEL_TOTP_KEY", "").strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
+# Optional LLM enrichment for the agent layer. Disabled by default: every
+# agent has a deterministic core, and LLM output may only annotate/tighten a
+# decision — it can NEVER bypass the risk gate chain.
+LLM_AGENTS_ENABLED = _bool("LLM_AGENTS_ENABLED")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()  # macro 2nd opinion
+
 # SEBI: every live order must carry the registered algo tag.
 ALGO_ID_TAG = os.getenv("ALGO_ID_TAG", "").strip()
 
@@ -83,6 +90,10 @@ MIN_REWARD_RISK = _float("MIN_REWARD_RISK", "2.0")
 MAX_POSITION_MARGIN_PCT = _float("MAX_POSITION_MARGIN_PCT", "30.0")
 MAX_CLUSTER_MARGIN_PCT = _float("MAX_CLUSTER_MARGIN_PCT", "50.0")
 ATR_SL_MULT = _float("ATR_SL_MULT", "1.5")
+
+# Bull score must beat bear score by this margin before the Trader agent
+# turns a debate into a proposal (agentic-layer sensitivity knob).
+AGENT_APPROVAL_MARGIN = _float("AGENT_APPROVAL_MARGIN", "1.0")
 
 # Paper executor: simulated slippage applied to fills, % of price.
 PAPER_SLIPPAGE_PCT = _float("PAPER_SLIPPAGE_PCT", "0.05")

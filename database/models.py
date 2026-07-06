@@ -77,6 +77,19 @@ CREATE TABLE IF NOT EXISTS decision_log (
 )
 """
 
+# Versioned changelog of every parameter the Reflection agent adapts —
+# what changed, when, why, and the old value so it can be rolled back.
+_PARAM_CHANGES_DDL = """
+CREATE TABLE IF NOT EXISTS param_changes (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    param     TEXT NOT NULL,
+    old_value REAL,
+    new_value REAL,
+    reason    TEXT
+)
+"""
+
 # Idempotent column additions: (table, column, type). Each is attempted and
 # an OperationalError (column exists) is ignored.
 _MIGRATIONS: list[tuple[str, str, str]] = [
@@ -96,7 +109,7 @@ def _conn(db_path: Path | str | None = None) -> sqlite3.Connection:
 def init_db(db_path: Path | str | None = None) -> None:
     with _conn(db_path) as c:
         for ddl in (_TRADES_DDL, _DAILY_SUMMARY_DDL, _BOT_STATE_DDL,
-                    _DECISION_LOG_DDL):
+                    _DECISION_LOG_DDL, _PARAM_CHANGES_DDL):
             c.execute(ddl)
         for table, column, coltype in _MIGRATIONS:
             try:
@@ -272,3 +285,24 @@ def log_decision(trigger: str, symbol: str, stage: str, decision: str,
                VALUES (?,?,?,?,?,?)""",
             (trigger, symbol, stage, decision, rationale, raw_json),
         )
+
+
+def log_param_change(param: str, old_value: float, new_value: float,
+                     reason: str, db_path: Path | str | None = None) -> None:
+    with _conn(db_path) as c:
+        c.execute(
+            """INSERT INTO param_changes (param, old_value, new_value, reason)
+               VALUES (?,?,?,?)""",
+            (param, old_value, new_value, reason),
+        )
+
+
+def get_param_history(param: str | None = None,
+                      db_path: Path | str | None = None) -> list[dict]:
+    q = "SELECT * FROM param_changes"
+    args: tuple = ()
+    if param:
+        q += " WHERE param=?"
+        args = (param,)
+    with _conn(db_path) as c:
+        return [dict(r) for r in c.execute(q + " ORDER BY id", args)]
