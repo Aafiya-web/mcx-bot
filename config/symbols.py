@@ -79,6 +79,19 @@ POINT_VALUES: dict[str, int] = {
     "ALUMINIUM": 5000,
 }
 
+# Approximate initial margin as % of contract notional (SPAN + exposure).
+# Used ONLY for the margin-utilisation caps in risk/ — paper sizing sanity,
+# never for real margin decisions. VERIFY against the broker's margin
+# calculator at step 2 research / before live; MCX revises these often.
+MARGIN_PCT_ESTIMATE: dict[str, float] = {
+    "CRUDEOIL": 10.0, "CRUDEOILM": 10.0,
+    "NATURALGAS": 12.0, "NATURALGASM": 12.0,
+    "GOLD": 8.0, "GOLDM": 8.0,
+    "SILVER": 10.0, "SILVERM": 10.0,
+    "COPPER": 9.0,
+    "ZINC": 9.0, "ALUMINIUM": 9.0,
+}
+
 # Same-direction risk is never stacked within a cluster (mcx-correlation-filter).
 CORRELATION_CLUSTERS: dict[str, dict] = {
     "ENERGY": {

@@ -49,7 +49,10 @@ LIVE_TRADING = _bool("LIVE_TRADING")  # the one-line paper->live switch
 
 # Simulated capital for paper-mode sizing only. NOT real money and NOT used
 # in live mode (live uses INITIAL_CAPITAL, which the user must set).
-PAPER_CAPITAL = _float("PAPER_CAPITAL", "100000")
+# ₹5L default: standard MCX lots carry ₹30k-60k margin each, so a smaller
+# figure sizes zero lots on most instruments. For small-account simulation
+# set USE_MINI_CONTRACTS=true instead of lowering this.
+PAPER_CAPITAL = _float("PAPER_CAPITAL", "500000")
 
 # ------------------------------------------------- secrets (empty = disabled)
 
@@ -75,8 +78,10 @@ MAX_DRAWDOWN_PCT = _opt_float("MAX_DRAWDOWN_PCT")      # % from equity peak
 MAX_RISK_PER_TRADE_PCT = _float("MAX_RISK_PER_TRADE_PCT", "1.0")
 MAX_TRADES_PER_DAY = _int("MAX_TRADES_PER_DAY", "5")
 MIN_REWARD_RISK = _float("MIN_REWARD_RISK", "2.0")
-MAX_POSITION_PCT = _float("MAX_POSITION_PCT", "10.0")
-MAX_CLUSTER_PCT = _float("MAX_CLUSTER_PCT", "15.0")
+# Margin-utilisation caps (MCX futures are leveraged, so caps are expressed
+# against ESTIMATED MARGIN, not notional — see symbols.MARGIN_PCT_ESTIMATE):
+MAX_POSITION_MARGIN_PCT = _float("MAX_POSITION_MARGIN_PCT", "30.0")
+MAX_CLUSTER_MARGIN_PCT = _float("MAX_CLUSTER_MARGIN_PCT", "50.0")
 ATR_SL_MULT = _float("ATR_SL_MULT", "1.5")
 
 # Paper executor: simulated slippage applied to fills, % of price.
