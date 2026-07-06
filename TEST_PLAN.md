@@ -15,6 +15,10 @@ Run stage A after every code change. It requires no credentials and no market.
 
 ## Stage B — paper against live market data (≥ 4 weeks)
 
+**Prerequisite:** complete the MUST-FIX items in HANDOFF.md §12 (landmines
+L1/L2/L6/L7/L8) — the live-data wiring is not Stage-B-ready as shipped;
+running it unmodified will rate-limit the broker API and delay stop checks.
+
 Setup: Angel One credentials in `.env`, `LIVE_TRADING=false`, Telegram
 configured, bot running via systemd (or `scripts/run_bot.py`).
 

@@ -5,10 +5,17 @@
 > strategy reasoning — it is all here and in the code. Assume nothing lives in
 > anyone's head. Read this file, then `CLAUDE.md`, then the `skills/` files.
 
-**State as of 2026-07-06:** Build Order steps 1–12 complete. Paper mode runs
-end-to-end offline (146 tests green, `scripts/paper_session.py` exercises the
-full pipeline). Live trading has NEVER been enabled and must not be until the
-runbook at the bottom is completed by the owner.
+**State as of 2026-07-07:** Build Order steps 1–12 complete, plus the live
+economic-calendar feed (step 13). Paper mode runs end-to-end offline (159
+tests green, `scripts/paper_session.py` exercises the full pipeline). Live
+trading has NEVER been enabled and must not be until the runbook at the
+bottom is completed by the owner.
+
+**Before you change ANY code, read §3b (landmines) and §3c (per-module
+notes).** Several things in this system look like bugs but are deliberate,
+and several deliberate scope cuts will bite if you run modes that were
+never exercised (§12 must-fix list). The original builder audited its own
+work adversarially on 2026-07-07; §3b is that audit.
 
 ---
 
@@ -74,6 +81,192 @@ paper mode costs ₹0 in API fees and the whole test suite runs offline.
 8. **Dashboard is read-only.** A compromised port 5001 cannot trade.
 9. **PAPER_CAPITAL default ₹5,00,000** — smaller capital sizes 0 lots on most
    standard contracts (see #3), which looks like "bot is dead" but is honest.
+
+## 3b. LANDMINES — where money gets lost, or a "fix" makes things worse
+
+Read this before changing ANY behavior. Tags: 💸 = can lose money,
+🧨 = breaks silently, 🧠 = looks wrong but is deliberate — do not "fix".
+
+- **L1 💸 The tick loop is single-threaded, and the live-data wiring as
+  shipped is NOT usable for Stage B yet.** `Engine.tick()` does stop
+  checks AND candle fetches AND agent evaluation on one thread. With
+  `LiveFeed`, `_scan_for_entries` would make ~20 HTTP calls (plus ~8s of
+  built-in politeness sleeps in `data/historical.py`) EVERY 3-second tick
+  — instant Angel rate limits (AB1010) and, far worse, stop checks
+  delayed by many seconds: the exact late-stop failure this project
+  exists to prevent. **Required fix before paper-on-live-data:** scan for
+  entries only on a new 15-min bar close (candle signals cannot change
+  mid-bar); per-tick work must be only LTP polls for open positions. If
+  evening slippage audits still degrade, move `monitor.check()` onto its
+  own 1s thread — it is self-contained by design. DO NOT "reduce load" by
+  increasing the tick interval; that trades stop latency for comfort.
+- **L2 💸 `LiveFeed.get_candles` computes fetch days assuming ~30 bars/day
+  for EVERY interval.** For `ONE_HOUR` with lookback 210 it fetches ~9
+  days ≈ 130 hourly bars — below the EMA-200 warmup — so GOLD's
+  `ema_trend` would silently never signal in live mode. Fix: a
+  bars-per-day map per interval (15-min ≈ 34, 1H ≈ 14.5 on MCX hours).
+- **L3 💸 Backtesting GOLD prints "No trades generated" — that is a
+  window-size artifact, not a broken strategy.** `backtest/engine.py`
+  slides a 250-bar 15-min window; resampled to 1H that is ~62 bars, below
+  EMA-200 warmup, so `ema_trend` never exits HOLD. Fix: LOOKBACK ≥ ~850
+  for hourly strategies, or feed the walker native 1H history. Don't
+  conclude the strategy fails the gate from this.
+- **L4 💸 Live SL-M backstop double-fire race — the riskiest unproven
+  path in the system.** On a stop breach the monitor fires a market exit,
+  then cancels the resting exchange SL-M. In a fast live market the
+  exchange backstop can fill FIRST; both fills = the position flips to an
+  unintended opposite position. Paper cannot exhibit this (one process,
+  sequential). Before live: reconcile — check the backstop's order status
+  and cancel-and-verify BEFORE firing the market exit, or exit by
+  modifying the backstop itself. Listed in §9.
+- **L5 🧨 `PaperExecutor.process_pending()` is never called by the engine
+  — deliberately.** The monitor fires stops itself and cancels the
+  backstop. If you see "stuck PENDING orders" and wire process_pending
+  into the loop, every stop will exit TWICE (monitor exit + phantom
+  backstop fill). It exists for tests and future multi-process designs.
+- **L6 🧨 Daily limits do not survive restarts and are never reset at
+  day boundaries.** `DailyLimitTracker` is in-memory: a restart mid-day
+  zeroes `daily_pnl` (a crash after heavy losses re-arms the full daily
+  budget — unsafe direction), and nothing calls `reset()` at date change,
+  so across a multi-day run the loss counter accumulates until it blocks
+  trading forever (safe direction, still wrong). Fix: persist
+  `daily_pnl`/`trades_today` in `bot_state` keyed by IST date; reset on
+  date change inside `tick()`.
+- **L7 🧨 The circuit breaker's equity PEAK is in-memory (the halt flag
+  is not).** After a restart the guard re-arms from current equity, so a
+  slow bleed punctuated by restarts may never trip the breaker. Fix:
+  persist `equity_peak` in `bot_state`, restore in
+  `PortfolioGuard.__init__`, clear it only in `manual_reset()`.
+- **L8 🧨 Contract rollover is implemented but UNWIRED.** Nothing calls
+  `needs_rollover`/`rollover_position`; `run_bot.py` resolves tokens once
+  at startup; `ctx.days_to_expiry` is always `None` in the engine, so the
+  risk team's expiry veto/halving NEVER fires today. Wire: a daily 09:05
+  check (per the mcx-contract-monitor skill) that re-resolves contracts,
+  rolls open positions, calls `LiveFeed.update_token()`, and feeds
+  `days_to_expiry` into the context. Until then, do not hold live
+  positions into expiry week.
+- **L9 🧨 Parameter adaptation does not survive restarts — by design,
+  but the logs will confuse you.** `apply_param` mutates module globals;
+  a restart reverts to defaults while `param_changes` says otherwise.
+  Restart-as-reset-to-known-good is intentional. If persistence is ever
+  wanted: replay `param_changes` through `apply_param` at startup (it
+  re-clamps to bounds) — never bypass the bounds.
+- **L10 🧠 All DB timestamps are UTC** (SQLite `CURRENT_TIMESTAMP`).
+  Day-bucketed queries (`DATE(exit_time)=DATE('now')`) are correct ONLY
+  because the whole MCX session (09:00–23:30 IST = 03:30–18:00 UTC) fits
+  inside one UTC day. Any overnight feature, or storing IST strings,
+  silently breaks daily P&L, briefings, and the trades/day counter.
+- **L11 🧠 Finnhub event times are ASSUMED to be UTC** — the docs were
+  unverifiable at build time (JS-only page). If they are actually
+  US-Eastern, every blackout window is shifted 4–5 hours. Verify with the
+  first real key: EIA crude inventory must show ~20:00 IST on a Wednesday
+  (`ts_ist()`). The static fallback hardcodes 14:30 UTC (the EDT release
+  time); in US winter the real release is 15:30 UTC — a known ±1h drift
+  in the fallback only, accepted.
+- **L12 🧠 Entry price vs signal levels mismatch is intentional.** Trades
+  log the slipped FILL as `entry_price`, while stop/target come from the
+  signal bar's close-based ATR structure; realized RR is slightly worse
+  than the gate's RR. DO NOT "fix" by recomputing the stop from the fill:
+  the stop is a structural level, not an offset from wherever we happened
+  to fill; recomputing widens stops after bad fills — exactly backwards.
+- **L13 🧠 The backtest is pessimistic ON PURPOSE** (same-bar SL/TP →
+  stop-first, ₹40 round trip, slippage both fills, day-end squareoff).
+  If results improve after touching `backtest/engine.py`, first suspect
+  you broke the pessimism, not that you found alpha.
+- **L14 🧠 MockFeed profitability is meaningless.** `paper_session.py`
+  proves the plumbing; its win rate is noise from a synthetic random
+  walk. Never quote it as evidence for the go/no-go gate.
+- **L15 🧠 The correlation filter allows OPPOSITE-direction positions in
+  the same cluster on purpose** (long CRUDEOIL + short NATURALGAS is a
+  spread, not doubled exposure). Only same-direction stacking is blocked.
+  Don't "tighten" it to block both without understanding that.
+
+## 3c. Per-module maintenance notes (invariants / debugging / extending)
+
+**config/settings.py** — Invariant: money values are `None` until a human
+sets them; `validate_live_config()` reads module globals (not env) so tests
+and runtime overrides agree. Extend by adding an env-typed constant + (if
+live-critical) a line in `validate_live_config`. Never give a money value a
+default.
+
+**config/symbols.py** — One source of truth. P&L and sizing use
+`POINT_VALUES`, never `LOT_SIZES` (GOLD: lot 1kg but quotes per 10g → point
+value 100 ≠ lot size 1000). New instrument = add to all six dicts + a
+cluster, or tests in `test_step1` fail and tell you what's missing.
+
+**database/models.py** — Schema changes ONLY via the `_MIGRATIONS` list
+(idempotent ALTERs); never edit shipped DDL — existing DBs won't get the
+change. Every function takes `db_path` so tests isolate; keep that on
+anything you add. WAL means a reader (dashboard) never blocks the writer.
+
+**broker/** — `get_order_manager()` is the only legal way to obtain an
+executor. `SmartApi` imports are lazy INSIDE functions — keep it that way
+or paper mode grows a hard dependency. Debug live auth with the error
+table in §5 / the mcx-angel-auth skill.
+
+**data/feed.py** — Both feeds honor one contract: `get_ltp`,
+`get_candles(symbol, interval, lookback)` → OHLCV indexed by timestamp.
+Anything new (websocket feed, another broker) implements that contract and
+nothing downstream changes. MockFeed is deterministic per seed — bug
+reproductions should quote the seed. See L2 before trusting LiveFeed
+lookbacks.
+
+**data/economic_calendar.py** — New source = implement
+`CalendarProvider.fetch()` returning `EconEvent`s in UTC and pass it to
+`EconomicCalendar(provider=...)`. The regex map is the relevance filter;
+extending coverage means extending `EVENT_SYMBOL_MAP`, not trusting
+provider impact grades. Debug: `bot_state.econ_cal_cache` shows exactly
+what the bot believes today.
+
+**core/indicators.py** — Pure functions, unit-tested against hand-computed
+values. If an indicator "looks wrong", write the arithmetic for 3 bars by
+hand first; Wilder smoothing (ATR/ADX) intentionally differs from plain
+EMA. Donchian is shifted one bar on purpose — unshifted channels can never
+break out (test_donchian explains).
+
+**core/regime.py** — Thresholds are module globals BECAUSE the reflection
+agent mutates them (bounded). Don't convert to constants/frozen config
+without reworking `agents/reflection.py:PARAM_BOUNDS` targets.
+
+**strategies/** — Discipline lives in `base.make_signal` (RR gate) and
+`router.RegimeGated` (regime gate). A new strategy: subclass `Strategy`,
+return via `make_signal`, register in `router.get_strategy`, map in
+`config/symbols.py` — and it inherits every guardrail. Never let the
+engine call an unwrapped strategy.
+
+**risk/** — The chain order in `run_gate_chain` is meaningful (cheap/fatal
+checks first). New checks follow the `check(name, ok, detail)` pattern so
+they appear in every decision-log audit. `GateResult.checks` is the
+debugging tool: it tells you exactly which gate refused and why.
+
+**positions/monitor.py** — Invariants: stop compared against the STORED
+number; exits are MARKET orders; stops only tighten; backstop cancelled on
+every close. The R-ladder constants at the top are the only tuning knobs.
+Slippage prints as `STOP AUDIT` log lines and in the evening report — that
+is the module's health metric.
+
+**agents/ + core/orchestrator.py** — Deterministic scores are the
+decision; LLM output is annotation. Adding an agent: subclass `Agent`,
+return `AgentOutput`, insert into `Orchestrator.evaluate`'s sequence, and
+it is automatically decision-logged. The PM must remain the only path to
+execution.
+
+**notifications/** — `send_message` never raises; keep that property, the
+engine relies on it. The command poller trusts only `TELEGRAM_CHAT_ID`;
+`/halt` must never become clearable remotely.
+
+**dashboard/** — Read-only by design; adding a control endpoint would give
+port 5001 trading authority. Add views as new `/api/*` routes reading
+SQLite directly.
+
+**backtest/** — Uses the live strategy objects deliberately; if you fork
+backtest-only strategy logic, the gate stops validating what actually
+runs. See L3/L13.
+
+**scripts/ + tests/** — `preflight.py` is meant to accrete one line per
+subsystem; when you add a module, add its line. Tests are numbered by
+build step; new features get a new `test_stepN_*.py`, regressions get a
+test in the step they belong to.
 
 ## 4. Parameters that matter
 
@@ -159,6 +352,12 @@ Telegram (optional): set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`. Commands:
 - Exact expiry dates: `parse_expiry` approximates the 20th (rolls early —
   safe); wire the instrument-master expiry when convenient.
 - MCX seasonal close time (23:30 vs 23:55) each March/November.
+- Finnhub event timezone is UTC (landmine L11): confirm EIA crude shows
+  ~20:00 IST on a Wednesday via `ts_ist()` with the real key.
+- SL-M backstop double-fire reconciliation (landmine L4) is IMPLEMENTED
+  and tested before the first live order — not optional.
+- `LiveFeed` interval-aware fetch depth (landmine L2) fixed before
+  trusting any 1H strategy in live/paper-live mode.
 
 ## 10. Paper → Live runbook (the owner executes this, never the bot)
 
@@ -209,6 +408,13 @@ static table (added 2026-07-07):
   macro agent is the hook for that.
 
 ## 12. Known gaps / deferred work
+
+**MUST-FIX before Stage B (paper against live data)** — details in §3b:
+L1 (scan-on-bar-close + fast stop loop), L2 (interval-aware fetch depth),
+L6 (persist + daily-reset the loss tracker), L7 (persist the equity peak),
+L8 (wire rollover + days_to_expiry). These are deliberate scope cuts, not
+oversights: the mock-data pipeline never exercises them, so they were
+documented instead of half-built.
 
 - `.mcp.json` + MCP connectors (n8n, Drive, Gmail, Calendar, Netlify) were in
   the original spec but the file was never provided; not required for trading.

@@ -64,9 +64,14 @@ class PaperExecutor(OrderManager):
     """Simulated fills against live (or mock) prices. Zero real orders.
 
     Market orders fill instantly at LTP plus adverse slippage
-    (settings.PAPER_SLIPPAGE_PCT). SL-M orders rest in memory; the engine
-    calls process_pending() every tick so backstop behaviour — including
-    intended-vs-filled slippage — is simulated faithfully.
+    (settings.PAPER_SLIPPAGE_PCT). SL-M orders rest in memory.
+
+    NOTE: the engine deliberately does NOT call process_pending() — the
+    position monitor fires stop exits itself and cancels the backstop.
+    The resting SL-M only matters if the monitor dies, which cannot happen
+    in-process in paper mode. Calling process_pending() from the engine
+    loop would DOUBLE-CLOSE positions (see HANDOFF.md landmine L5).
+    process_pending() exists for tests and for future multi-process designs.
     """
 
     def __init__(self, ltp_fn: LtpFn):
