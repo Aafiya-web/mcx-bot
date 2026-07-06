@@ -87,6 +87,8 @@ paper mode costs ₹0 in API fees and the whole test suite runs offline.
 | `ADX_TRENDING/RANGING` | 25/20 | Regime gate (adaptable 20–30 / 15–22) |
 | `AGENT_APPROVAL_MARGIN` | 1.0 | Bull-bear score edge needed (adaptable 0.5–3.0) |
 | `PAPER_SLIPPAGE_PCT` | 0.05 | Simulated adverse fill % |
+| `EVENT_BLACKOUT_MINUTES` | 120 | No new entries on an instrument while one of its high-impact events is this close ahead |
+| `FINNHUB_API_KEY` | empty | Economic calendar source; empty = static weekly fallback |
 
 Adaptation: ONLY params in `agents/reflection.py:PARAM_BOUNDS` can change, are
 clamped, and land in `param_changes` with old value + reason (rollback = set it
@@ -173,14 +175,46 @@ Telegram (optional): set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`. Commands:
    briefings daily. The kill switches: Telegram `/halt`, or
    `systemctl stop mcx-bot`, or set `MAX_DRAWDOWN_PCT` tight.
 
-## 11. Known gaps / deferred work
+## 11. Economic calendar feed (`data/economic_calendar.py`)
+
+The macro agent and the entry-blackout gate read a real calendar, not a
+static table (added 2026-07-07):
+
+- **Primary provider:** Finnhub `GET /api/v1/calendar/economic` (set
+  `FINNHUB_API_KEY` in `.env`; free signup at finnhub.io, but the calendar
+  endpoint may be premium-gated — a 401/403 just triggers the fallback).
+- **Fallback:** `StaticWeeklyProvider` — the original EIA Wed/Thu table,
+  regenerated as dated events at 14:30 UTC (20:00 IST). Used whenever the
+  primary fails for ANY reason. The source in use is logged
+  (`WARNING ... using 'static-weekly' fallback`), cached, and printed in the
+  morning briefing's MARKET CONTEXT line — a silent fallback is impossible.
+- **Relevance filter:** the regex map `EVENT_SYMBOL_MAP` (Fed/FOMC → all 5,
+  US CPI → metals+crude, NFP, EIA crude/gas, OPEC) IS the high-impact
+  filter; provider impact grades are recorded but not trusted.
+- **Enforcement:** events within `EVENT_BLACKOUT_MINUTES` (default 2h) of
+  `now` block NEW entries on affected instruments via the gate chain's
+  `event_blackout` check — auditable in every decision-log row, impossible
+  to bypass. Events later the same day (outside the window) still halve
+  size via the conservative risk perspective, as before.
+- **Cache:** one JSON blob per day in `bot_state` (`econ_cal_cache`) — one
+  API call per day, refreshed at the 07:30 briefing or first access after
+  midnight. Swap providers by implementing `CalendarProvider.fetch()` and
+  passing it to `EconomicCalendar(provider=...)`.
+- **Timezone:** providers deliver UTC; conversion uses fixed +05:30 (India
+  has no DST). The host clock must be IST — the systemd unit now pins
+  `Environment=TZ=Asia/Kolkata` (Oracle VMs default to UTC).
+- **Limitations:** OPEC meetings are caught only if the provider carries
+  them (irregular dates, not in the fallback); geopolitical headlines are
+  out of scope for a calendar API — the optional LLM second opinion in the
+  macro agent is the hook for that.
+
+## 12. Known gaps / deferred work
 
 - `.mcp.json` + MCP connectors (n8n, Drive, Gmail, Calendar, Netlify) were in
   the original spec but the file was never provided; not required for trading.
 - TradingView webhook ingestion (optional signal source) — not built; if added,
   it must enter as a *candidate signal* through the full gate chain.
-- Macro agent's calendar is weekly-static (EIA Wed/Thu); a real economic
-  calendar feed (Forex Factory RSS) is a good upgrade.
 - `daily_summary` table exists but is not yet written by a nightly job; the
   reports compute from `trades` directly.
 - Exchange holidays: treated as "no data → no trades", not a calendar.
+- OPEC meeting dates and geopolitical events: see §11 limitations.

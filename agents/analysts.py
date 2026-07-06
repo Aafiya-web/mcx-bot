@@ -4,14 +4,9 @@ Deterministic scoring — every point is traceable to a fact in the context.
 """
 
 from agents.base import Agent, AgentOutput, DecisionContext, ask_llm
-
-# Weekly scheduled events that move MCX commodities (IST). The macro agent
-# flags them; the conservative risk perspective halves size on flagged days.
-# weekday: 0=Mon .. 4=Fri.
-SCHEDULED_EVENTS: dict[int, list[tuple[str, str]]] = {
-    2: [("EIA crude inventory", "CRUDEOIL")],          # Wednesday
-    3: [("EIA natural gas storage", "NATURALGAS")],    # Thursday
-}
+# Re-exported for backward compatibility: the weekly table now lives with
+# the calendar providers (it is the offline fallback's source of truth).
+from data.economic_calendar import SCHEDULED_EVENTS  # noqa: F401
 
 
 class TechnicalAnalyst(Agent):
@@ -46,28 +41,42 @@ class TechnicalAnalyst(Agent):
 
 class MacroAnalyst(Agent):
     """Covers the blind spot pure-technical bots have: scheduled events.
-    Deterministic core = the weekly event calendar; the optional LLM/second
-    opinion may only ADD risk flags, never remove them."""
+    Deterministic core = the live economic calendar snapshot in the context
+    (Finnhub, or the static weekly fallback — ctx.calendar_source says
+    which). The optional LLM second opinion may only ADD caution, never
+    remove flags. Imminent events (inside the blackout window) are also
+    hard-blocked by the gate chain's event_blackout check — this agent's
+    flags additionally drive the conservative size-halving for events later
+    in the day."""
 
     name = "macro"
 
     def run(self, ctx: DecisionContext) -> AgentOutput:
-        flags = [name for name, sym in SCHEDULED_EVENTS.get(ctx.weekday, [])
-                 if sym == ctx.symbol or sym == "ALL"]
+        flags = list(ctx.events_today)
+        imminent = [f"{e.name} at {e.ts_ist():%H:%M} IST"
+                    for e in ctx.upcoming_events]
 
         llm_note = ask_llm(
             f"Any major macro risk today for MCX {ctx.symbol}? "
             f"Known scheduled events: {flags or 'none'}.")
-        rationale = (f"scheduled events today: {', '.join(flags)}"
-                     if flags else "no scheduled high-impact events today")
+        source = ctx.calendar_source or "no calendar data"
+        if imminent:
+            rationale = (f"IMMINENT (blackout window): {', '.join(imminent)}"
+                         f" [{source}]")
+        elif flags:
+            rationale = f"events today: {', '.join(flags)} [{source}]"
+        else:
+            rationale = f"no scheduled high-impact events today [{source}]"
         if llm_note:
             rationale += f" | LLM: {llm_note}"
 
         return AgentOutput(self.name,
                            "NEUTRAL",
-                           0.5 if flags else 0.8,
+                           0.5 if (flags or imminent) else 0.8,
                            rationale,
-                           {"risk_flags": flags})
+                           {"risk_flags": flags,
+                            "imminent": imminent,
+                            "source": source})
 
 
 class RegimeAnalyst(Agent):

@@ -30,7 +30,12 @@ class DecisionContext:
     days_to_expiry: int | None = None
     consecutive_losses: int = 0
     trades_today: int = 0
-    weekday: int = 0                   # 0=Mon .. 6=Sun (event calendar)
+    weekday: int = 0                   # 0=Mon .. 6=Sun (informational)
+    # Economic calendar (data/economic_calendar.py), scoped to this symbol:
+    upcoming_events: list = field(default_factory=list)   # EconEvents inside
+    #                                                       the blackout window
+    events_today: list = field(default_factory=list)      # names, today
+    calendar_source: str = ""          # finnhub / static-weekly
 
 
 @dataclass

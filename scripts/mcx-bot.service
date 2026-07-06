@@ -14,6 +14,9 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/mcx-trading-bot
+# The session scheduler and event-blackout windows assume an IST clock;
+# Oracle VMs default to UTC, so pin the timezone here.
+Environment=TZ=Asia/Kolkata
 # Secrets live in .env (chmod 600), loaded by the app itself via dotenv;
 # EnvironmentFile is a belt-and-suspenders duplicate for systemd overrides.
 EnvironmentFile=-/home/ubuntu/mcx-trading-bot/.env

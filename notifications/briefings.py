@@ -8,9 +8,9 @@ siren. Scheduling: scripts/run_bot.py fires them once per day; cron works
 too (see HANDOFF.md).
 """
 
-from datetime import date, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 
-from agents.analysts import SCHEDULED_EVENTS
+from data.economic_calendar import EconomicCalendar
 from database import models
 from notifications.telegram import send_message
 
@@ -46,17 +46,22 @@ def stop_loss_audit(db_path=None) -> str:
     return "\n".join(lines)
 
 
-def market_context(today: date) -> str:
-    events = SCHEDULED_EVENTS.get(today.weekday(), [])
+def market_context(today: date, calendar: EconomicCalendar) -> str:
+    events = calendar.events_today(datetime.combine(today, dtime(9, 0)))
+    src = calendar.source or "?"
     if not events:
-        return "No scheduled high-impact events today."
-    return "Today: " + "; ".join(f"{name} ({sym})" for name, sym in events)
+        return f"No scheduled high-impact events today. [{src}]"
+    listed = "; ".join(f"{e.name} ({'/'.join(e.symbols)}) "
+                       f"{e.ts_ist():%H:%M} IST" for e in events)
+    return f"Today [{src}]: {listed}"
 
 
 def generate_morning_briefing(db_path=None,
                               expiry_days: dict[str, int] | None = None,
-                              today: date | None = None) -> str:
+                              today: date | None = None,
+                              calendar: EconomicCalendar | None = None) -> str:
     today = today or date.today()
+    calendar = calendar or EconomicCalendar(db_path=db_path)
     open_pos = models.get_open_positions(db_path)
     yesterday = models.get_daily_pnl(
         (today - timedelta(days=1)).isoformat(), db_path)
@@ -82,7 +87,7 @@ Net P&L: {_fmt_pnl(yesterday['total'])} ({len(yesterday['trades'])} trades)
 Win rate {week['win_rate']:.0f}% | PF {'∞' if pf == float('inf') else f'{pf:.2f}'} | Net {_fmt_pnl(week['total_pnl'])}
 
 MARKET CONTEXT
-{market_context(today)}
+{market_context(today, calendar)}
 
 RISK FLAGS
 {chr(10).join(risk_lines)}"""
@@ -124,8 +129,10 @@ FLAGS
     return _trim(text)
 
 
-def send_morning_briefing(db_path=None, expiry_days=None) -> bool:
-    return send_message(generate_morning_briefing(db_path, expiry_days))
+def send_morning_briefing(db_path=None, expiry_days=None,
+                          calendar=None) -> bool:
+    return send_message(generate_morning_briefing(db_path, expiry_days,
+                                                  calendar=calendar))
 
 
 def send_evening_report(db_path=None) -> bool:

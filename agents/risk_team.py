@@ -18,10 +18,11 @@ class RiskTeam(Agent):
 
     def run(self, ctx: DecisionContext,
             macro: AgentOutput = None) -> AgentOutput:
-        # NEUTRAL: the binding gate chain.
+        # NEUTRAL: the binding gate chain (includes the event blackout).
         gate = run_gate_chain(ctx.signal, ctx.symbol, ctx.regime,
                               ctx.open_positions, ctx.capital, self.daily,
-                              self.guard, ctx.equity)
+                              self.guard, ctx.equity,
+                              upcoming_events=ctx.upcoming_events)
         if not gate.approved:
             return AgentOutput(self.name, "VETO", 1.0,
                                f"gate chain: {gate.rejection_reason}",

@@ -1,7 +1,8 @@
 """The mandatory risk gate chain — NOTHING reaches execution except through
 run_gate_chain():
 
-    signal -> regime OK -> ATR sizing -> correlation -> portfolio guard
+    signal -> regime OK -> event blackout -> ATR sizing -> correlation
+           -> portfolio guard
 
 Every check's verdict is recorded so the decision log (and you) can see
 exactly why a trade was taken or refused.
@@ -9,6 +10,7 @@ exactly why a trade was taken or refused.
 
 from dataclasses import dataclass, field
 
+from config.symbols import base_of
 from risk.correlation import cluster_exposure_ok, correlation_check
 from risk.portfolio_guard import PortfolioGuard
 from risk.position_sizing import DailyLimitTracker, position_size
@@ -27,8 +29,12 @@ class GateResult:
 
 def run_gate_chain(signal, symbol: str, regime, open_positions: list[dict],
                    capital: float, daily: DailyLimitTracker,
-                   guard: PortfolioGuard, equity: float) -> GateResult:
-    """signal: strategies.base.Signal (BUY/SELL). Returns the full audit."""
+                   guard: PortfolioGuard, equity: float,
+                   upcoming_events: list | None = None) -> GateResult:
+    """signal: strategies.base.Signal (BUY/SELL). Returns the full audit.
+
+    upcoming_events: EconEvent-shaped objects (name/ts_ist()/symbols)
+    already filtered to the blackout window by the calendar service."""
     res = GateResult(approved=False)
 
     def check(name: str, ok: bool, detail: str) -> bool:
@@ -49,6 +55,16 @@ def run_gate_chain(signal, symbol: str, regime, open_positions: list[dict],
     #    so no future code path can skip it).
     if not check("regime", regime.can_trade,
                  f"{regime.regime} (ADX {regime.adx})"):
+        return res
+
+    # 1b. Event blackout: no NEW entries while a high-impact event for this
+    #     instrument is imminent (window set by EVENT_BLACKOUT_MINUTES).
+    blocking = [e for e in (upcoming_events or [])
+                if base_of(symbol) in e.symbols]
+    if not check("event_blackout", not blocking,
+                 (f"BLOCKED: {blocking[0].name} at "
+                  f"{blocking[0].ts_ist():%H:%M} IST inside blackout window"
+                  if blocking else "no imminent high-impact events")):
         return res
 
     # 2. Daily limits.

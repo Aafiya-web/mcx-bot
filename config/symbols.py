@@ -162,13 +162,17 @@ def active_symbol(base: str) -> str:
     return base
 
 
-def cluster_of(symbol: str) -> str | None:
-    """Correlation cluster for a symbol (mini variants map to their base)."""
-    base = symbol
+def base_of(symbol: str) -> str:
+    """Base instrument for a traded symbol (mini variants map back)."""
     for name, info in INSTRUMENTS.items():
         if info["mini"] == symbol:
-            base = name
-            break
+            return name
+    return symbol
+
+
+def cluster_of(symbol: str) -> str | None:
+    """Correlation cluster for a symbol (mini variants map to their base)."""
+    base = base_of(symbol)
     for cluster, data in CORRELATION_CLUSTERS.items():
         if base in data["members"]:
             return cluster

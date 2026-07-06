@@ -95,7 +95,10 @@ def test_expiry_tomorrow_conservative_veto(orch):
 def test_event_day_halves_size(orch):
     o, _ = orch
     normal = o.evaluate(_ctx()).lots
-    event_day = o.evaluate(_ctx(weekday=2)).lots  # Wednesday: EIA crude
+    # Event later today (outside the blackout window): conservative halving.
+    event_day = o.evaluate(
+        _ctx(events_today=["EIA crude inventory"],
+             calendar_source="static-weekly")).lots
     assert event_day == max(1, normal // 2)
 
 

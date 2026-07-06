@@ -69,9 +69,13 @@ def _briefing_loop(engine):
     """Fire the two daily briefings, once each per day."""
     while True:
         now = datetime.now()
+        def _morning():
+            engine.calendar.refresh()  # fresh calendar for the new day
+            return briefings.send_morning_briefing(
+                engine.db, calendar=engine.calendar)
+
         for key, at, fire in (
-            ("last_morning", MORNING_AT,
-             lambda: briefings.send_morning_briefing(engine.db)),
+            ("last_morning", MORNING_AT, _morning),
             ("last_evening", EVENING_AT,
              lambda: briefings.send_evening_report(engine.db)),
         ):

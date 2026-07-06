@@ -71,6 +71,13 @@ LLM_AGENTS_ENABLED = _bool("LLM_AGENTS_ENABLED")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()  # macro 2nd opinion
 
+# Finnhub economic calendar (data/economic_calendar.py). Empty = the static
+# weekly fallback table is used (offline-safe, EIA Wed/Thu only).
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "").strip()
+# New entries on an instrument are blocked while a high-impact event for it
+# is within this many minutes ahead (enforced in the risk gate chain).
+EVENT_BLACKOUT_MINUTES = _int("EVENT_BLACKOUT_MINUTES", "120")
+
 # SEBI: every live order must carry the registered algo tag.
 ALGO_ID_TAG = os.getenv("ALGO_ID_TAG", "").strip()
 

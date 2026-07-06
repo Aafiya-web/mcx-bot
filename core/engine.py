@@ -22,6 +22,7 @@ from config import settings
 from config.symbols import ACTIVE_SYMBOLS, INSTRUMENTS, POINT_VALUES, \
     active_symbol
 from core import scheduler
+from data.economic_calendar import EconomicCalendar
 from core.orchestrator import Orchestrator
 from core.regime import classify_regime, mtf_regime, volatility_ok
 from database import models
@@ -38,7 +39,8 @@ logger = logging.getLogger(__name__)
 class Engine:
     def __init__(self, feed, order_manager, db_path=None,
                  capital: float | None = None,
-                 symbols: list[str] | None = None):
+                 symbols: list[str] | None = None,
+                 calendar: EconomicCalendar | None = None):
         settings.validate_live_config()  # refuses live-unconfigured startup
         self.feed = feed
         self.om = order_manager
@@ -50,6 +52,7 @@ class Engine:
 
         models.init_db(db_path)
         self.symbols = symbols if symbols is not None else list(ACTIVE_SYMBOLS)
+        self.calendar = calendar or EconomicCalendar(db_path=db_path)
         self.daily = DailyLimitTracker(self.capital)
         self.guard = PortfolioGuard(db_path=db_path)
         self.monitor = PositionMonitor(feed, order_manager, db_path)
@@ -127,6 +130,7 @@ class Engine:
     def _scan_for_entries(self, now: datetime) -> None:
         open_positions = models.get_open_positions(self.db)
         held = {p["symbol"] for p in open_positions}
+        cal_today = self.calendar.events_today(now)
 
         for base in self.symbols:
             symbol = active_symbol(base)
@@ -162,6 +166,10 @@ class Engine:
                 consecutive_losses=self.daily.consecutive_losses,
                 trades_today=self.daily.trades_today,
                 weekday=now.weekday(),
+                upcoming_events=self.calendar.upcoming_for(base, now),
+                events_today=[e.name for e in cal_today
+                              if base in e.symbols],
+                calendar_source=self.calendar.source or "",
             )
             decision = self.orchestrator.evaluate(ctx)
             if not decision.approved:
