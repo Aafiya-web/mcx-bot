@@ -79,7 +79,11 @@ CREATE TABLE IF NOT EXISTS decision_log (
 
 # Idempotent column additions: (table, column, type). Each is attempted and
 # an OperationalError (column exists) is ignored.
-_MIGRATIONS: list[tuple[str, str, str]] = []
+_MIGRATIONS: list[tuple[str, str, str]] = [
+    # Risk distance at entry (rupee points). The live stop_loss tightens over
+    # time, so R-based trailing needs the original distance preserved.
+    ("trades", "initial_risk", "REAL"),
+]
 
 
 def _conn(db_path: Path | str | None = None) -> sqlite3.Connection:
@@ -113,9 +117,10 @@ def log_trade(symbol: str, side: str, qty: int, entry: float, sl: float,
         cur = c.execute(
             """INSERT INTO trades
                (symbol, side, qty, entry_price, stop_loss, take_profit,
-                strategy, mode, status)
-               VALUES (?,?,?,?,?,?,?,?,'OPEN')""",
-            (symbol, side, qty, entry, sl, tp, strategy, mode),
+                strategy, mode, status, initial_risk, peak_price)
+               VALUES (?,?,?,?,?,?,?,?,'OPEN',?,?)""",
+            (symbol, side, qty, entry, sl, tp, strategy, mode,
+             abs(entry - sl), entry),
         )
         return cur.lastrowid
 
@@ -158,6 +163,13 @@ def update_stop(trade_id: int, new_sl: float,
     with _conn(db_path) as c:
         c.execute("UPDATE trades SET trailing_sl=?, stop_loss=? WHERE id=?",
                   (new_sl, new_sl, trade_id))
+
+
+def update_peak(trade_id: int, peak: float,
+                db_path: Path | str | None = None) -> None:
+    with _conn(db_path) as c:
+        c.execute("UPDATE trades SET peak_price=? WHERE id=?",
+                  (peak, trade_id))
 
 
 def get_daily_pnl(date: str | None = None,
