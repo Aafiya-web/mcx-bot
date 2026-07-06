@@ -1,0 +1,26 @@
+# Secrets — never commit
+.env
+.tokens.json
+
+# Databases
+*.db
+*.sqlite3
+*.sqlite3-*
+*.db-wal
+*.db-shm
+
+# Runtime state (kill switch, halt flags)
+state/
+!state/.gitkeep
+
+# Logs
+logs/
+!logs/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+.pytest_cache/
+*.egg-info/
