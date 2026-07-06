@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCX Bot — {{ mode }}</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: ui-monospace, Consolas, monospace; background: #0d1117;
+         color: #c9d1d9; margin: 0; padding: 1.5rem; }
+  h1 { font-size: 1.1rem; }
+  .badge { padding: .15rem .5rem; border-radius: 4px; font-weight: bold; }
+  .paper { background: #1f6feb33; color: #58a6ff; }
+  .live  { background: #da363333; color: #f85149; }
+  .halted{ background: #da3633; color: #fff; }
+  section { margin-top: 1.5rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+  th, td { text-align: left; padding: .3rem .6rem;
+           border-bottom: 1px solid #21262d; }
+  th { color: #8b949e; }
+  .pos { color: #3fb950; } .neg { color: #f85149; }
+  #meta { color: #8b949e; font-size: .8rem; }
+</style>
+</head>
+<body>
+<h1>MCX Trading Bot
+  <span class="badge {{ 'live' if mode == 'LIVE' else 'paper' }}">{{ mode }}</span>
+  <span id="flags"></span>
+</h1>
+<div id="meta">port {{ port }} · refreshes every 10s</div>
+
+<section><h2>Today</h2><div id="today">loading…</div></section>
+<section><h2>Open positions</h2><table id="open"></table></section>
+<section><h2>30-day performance</h2><div id="perf">loading…</div></section>
+<section><h2>Recent trades</h2><table id="trades"></table></section>
+<section><h2>Recent agent decisions</h2><table id="decisions"></table></section>
+
+<script>
+const inr = n => '₹' + Math.round(n).toLocaleString('en-IN');
+const cls = n => n >= 0 ? 'pos' : 'neg';
+
+async function refresh() {
+  const s = await (await fetch('/api/status')).json();
+  document.getElementById('flags').innerHTML =
+    (s.halted ? '<span class="badge halted">HALTED</span>' : '') +
+    (s.paused ? '<span class="badge paper">PAUSED</span>' : '');
+  document.getElementById('today').innerHTML =
+    `P&amp;L <span class="${cls(s.today_pnl)}">${inr(s.today_pnl)}</span>
+     over ${s.today_trades} closed trade(s)`;
+
+  document.getElementById('open').innerHTML =
+    '<tr><th>symbol</th><th>side</th><th>lots</th><th>entry</th><th>stop</th><th>target</th></tr>' +
+    (s.open_positions.map(p =>
+      `<tr><td>${p.symbol}</td><td>${p.side}</td><td>${p.qty}</td>
+       <td>${p.entry_price}</td><td>${p.stop_loss}</td><td>${p.take_profit}</td></tr>`
+    ).join('') || '<tr><td colspan="6">none</td></tr>');
+
+  const perf = await (await fetch('/api/performance')).json();
+  document.getElementById('perf').innerHTML =
+    `${perf.total_trades} trades · win rate ${perf.win_rate.toFixed(0)}% ·
+     PF ${perf.profit_factor === null ? '∞' : perf.profit_factor.toFixed(2)} ·
+     total <span class="${cls(perf.total_pnl)}">${inr(perf.total_pnl)}</span>`;
+
+  const trades = await (await fetch('/api/trades')).json();
+  document.getElementById('trades').innerHTML =
+    '<tr><th>id</th><th>symbol</th><th>side</th><th>entry</th><th>exit</th><th>reason</th><th>P&L</th></tr>' +
+    trades.slice(0, 20).map(t =>
+      `<tr><td>${t.id}</td><td>${t.symbol}</td><td>${t.side}</td>
+       <td>${t.entry_price}</td><td>${t.exit_price ?? '—'}</td>
+       <td>${t.exit_reason ?? 'OPEN'}</td>
+       <td class="${cls(t.pnl ?? 0)}">${t.pnl === null ? '—' : inr(t.pnl)}</td></tr>`
+    ).join('');
+
+  const dec = await (await fetch('/api/decisions')).json();
+  document.getElementById('decisions').innerHTML =
+    '<tr><th>ts</th><th>symbol</th><th>stage</th><th>verdict</th><th>rationale</th></tr>' +
+    dec.slice(0, 25).map(d =>
+      `<tr><td>${d.ts}</td><td>${d.symbol}</td><td>${d.stage}</td>
+       <td>${d.decision}</td><td>${d.rationale}</td></tr>`
+    ).join('');
+}
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>

@@ -98,6 +98,11 @@ AGENT_APPROVAL_MARGIN = _float("AGENT_APPROVAL_MARGIN", "1.0")
 # Paper executor: simulated slippage applied to fills, % of price.
 PAPER_SLIPPAGE_PCT = _float("PAPER_SLIPPAGE_PCT", "0.05")
 
+# ---------------------------------------------------------------- dashboard
+
+DASHBOARD_HOST = os.getenv("DASHBOARD_HOST", "127.0.0.1").strip()
+DASHBOARD_PORT = _int("DASHBOARD_PORT", "5001")  # Solana bot owns 5000
+
 # ------------------------------------------------------------------- paths
 
 DB_FILE = Path(os.getenv("DB_FILE", "").strip() or PROJECT_ROOT / "mcx_bot.db")

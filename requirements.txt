@@ -4,7 +4,7 @@ python-dotenv>=1.0
 pytest>=8.0
 pandas>=2.2
 numpy>=1.26
+Flask>=3.0
 
 # Live broker connectivity only (not needed for paper/mock):
 #   pip install smartapi-python pyotp
-# Dashboard (added at step 10): Flask

@@ -1,0 +1,28 @@
+# systemd unit for the MCX trading bot (Oracle Cloud VM, coexists with the
+# Solana bot). Install:
+#   sudo cp scripts/mcx-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mcx-bot
+# Logs:  journalctl -u mcx-bot -f      Dashboard:  http://127.0.0.1:5001
+
+[Unit]
+Description=MCX Multi-Agent Trading Bot (paper mode by default)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/mcx-trading-bot
+# Secrets live in .env (chmod 600), loaded by the app itself via dotenv;
+# EnvironmentFile is a belt-and-suspenders duplicate for systemd overrides.
+EnvironmentFile=-/home/ubuntu/mcx-trading-bot/.env
+ExecStart=/home/ubuntu/mcx-trading-bot/venv/bin/python scripts/run_bot.py
+Restart=always
+RestartSec=10
+# 1GB VM shared with the Solana bot — keep this bot on a leash.
+MemoryMax=350M
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
