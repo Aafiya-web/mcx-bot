@@ -40,7 +40,12 @@ class Engine:
     def __init__(self, feed, order_manager, db_path=None,
                  capital: float | None = None,
                  symbols: list[str] | None = None,
-                 calendar: EconomicCalendar | None = None):
+                 calendar: EconomicCalendar | None = None,
+                 expiry_fn=None):
+        """expiry_fn: optional zero-arg callable returning
+        {base_symbol: days_to_expiry} for the active contracts — refreshed
+        once per day (landmine L8). None (mock/paper without broker) means
+        no expiry awareness, matching the pre-fix behavior."""
         settings.validate_live_config()  # refuses live-unconfigured startup
         self.feed = feed
         self.om = order_manager
@@ -53,7 +58,10 @@ class Engine:
         models.init_db(db_path)
         self.symbols = symbols if symbols is not None else list(ACTIVE_SYMBOLS)
         self.calendar = calendar or EconomicCalendar(db_path=db_path)
-        self.daily = DailyLimitTracker(self.capital)
+        self.expiry_fn = expiry_fn
+        # persist=True: daily loss/trade counters survive restarts (L6)
+        self.daily = DailyLimitTracker(self.capital, persist=True,
+                                       db_path=db_path)
         self.guard = PortfolioGuard(db_path=db_path)
         self.monitor = PositionMonitor(feed, order_manager, db_path)
         self.orchestrator = Orchestrator(self.daily, self.guard, db_path)
@@ -62,8 +70,11 @@ class Engine:
             for base in self.symbols
         }
         self.stats = {"ticks": 0, "candidates": 0, "approved": 0,
-                      "closes": 0}
+                      "closes": 0, "scans": 0}
         self._squared_off_date = None
+        self._last_scan_bucket = None   # 15-min bucket of the last scan
+        self._maintenance_date = None   # daily reset / expiry refresh
+        self.expiry_days: dict[str, int] = {}
 
     # ------------------------------------------------------------- equity
 
@@ -87,6 +98,18 @@ class Engine:
         now = now or datetime.now()
         self.stats["ticks"] += 1
 
+        # 0. Once per (IST) day: reset daily limits (L6), refresh contract
+        #    expiries (L8). Cheap flag check on every other tick.
+        if self._maintenance_date != now.date():
+            self._maintenance_date = now.date()
+            self.daily.roll_date(now.date())
+            if self.expiry_fn:
+                try:
+                    self.expiry_days = self.expiry_fn()
+                except Exception as exc:
+                    logger.error("expiry refresh failed: %s", exc)
+                    telegram.send_error("expiry refresh", str(exc))
+
         # 1. Manage what's open: stops fire here, on time, every tick.
         for ev in self.monitor.check():
             self._on_close(ev)
@@ -107,11 +130,20 @@ class Engine:
                     self._on_close(ev)
             return
 
-        # 4. New entries.
+        # 4. New entries — but only on a NEW 15-min bar (landmine L1).
+        # Candle-based signals cannot change mid-bar, and in live mode a
+        # scan costs many HTTP calls; scanning every tick would delay the
+        # stop checks above, which must stay fast. Ticks between bar
+        # closes do only LTP-level work.
         if not scheduler.entries_allowed(now):
             return
         if models.is_paused(self.db):
             return
+        bucket = (now.date(), now.hour, now.minute // 15)
+        if bucket == self._last_scan_bucket:
+            return
+        self._last_scan_bucket = bucket
+        self.stats["scans"] += 1
         self._scan_for_entries(now)
 
     def _on_close(self, ev) -> None:
@@ -162,7 +194,7 @@ class Engine:
                 volume_ratio=round(vol_ratio, 2),
                 open_positions=open_positions,
                 capital=self.capital, equity=self.equity,
-                days_to_expiry=None,  # base symbols; live uses contracts
+                days_to_expiry=self.expiry_days.get(base),
                 consecutive_losses=self.daily.consecutive_losses,
                 trades_today=self.daily.trades_today,
                 weekday=now.weekday(),

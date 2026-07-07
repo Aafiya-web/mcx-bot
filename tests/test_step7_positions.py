@@ -148,17 +148,27 @@ def test_rollover_reopens_same_exposure(env, monkeypatch):
     monkeypatch.setattr("notifications.telegram.send_message",
                         lambda *a, **k: True)
     feed, om, monitor, db = env
-    feed.prices["CRUDEOIL26AUGFUT"] = 6010.0
     tid = _buy(monitor)
     pos = models.get_open_positions(db)[0]
 
+    # Positions stay keyed by the BASE symbol; the contract month changes
+    # only at the execution boundary, via switch_fn between close & reopen.
+    events = []
     new_id = ro.rollover_position(
         monitor, "CRUDEOIL", pos,
-        {"symbol": "CRUDEOIL26AUGFUT", "token": "99", "days_to_expiry": 40})
+        {"symbol": "CRUDEOIL26AUGFUT", "token": "99", "days_to_expiry": 40},
+        switch_fn=lambda: events.append("switched"))
     assert new_id is not None and new_id != tid
+    assert events == ["switched"]
 
     open_pos = models.get_open_positions(db)
     assert len(open_pos) == 1
-    assert open_pos[0]["symbol"] == "CRUDEOIL26AUGFUT"
+    assert open_pos[0]["symbol"] == "CRUDEOIL"   # base name, not the FUT
     assert open_pos[0]["side"] == "BUY"
     assert open_pos[0]["qty"] == 2
+    # the close order went out BEFORE the switch (old contract month)
+    close_fill = [f for f in om.fills if f.tag == "ROLLOVER"][0]
+    entry_fills = [f for f in om.fills if f.tag != "ROLLOVER"
+                   and f.side == "BUY"]
+    assert close_fill.side == "SELL"
+    assert len(entry_fills) == 2                 # original entry + reopen

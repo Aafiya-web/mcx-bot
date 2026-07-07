@@ -81,14 +81,27 @@ class PositionMonitor:
 
     def _close(self, pos: dict, reason: str,
                intended: float) -> CloseEvent:
-        side = "SELL" if pos["side"] == "BUY" else "BUY"
-        fill = self.om.place_market_order(pos["symbol"], side, pos["qty"],
-                                          tag=reason)
+        # Landmine L4: cancel the resting SL-M backstop FIRST. If the
+        # cancel is rejected, the exchange already executed it — the
+        # position is ALREADY flat, and firing our own market exit on top
+        # would flip us into an unintended opposite position. In that case
+        # the backstop's fill IS the exit.
+        fill = None
+        backstop = self._backstops.pop(pos["id"], None)
+        if backstop and not self.om.cancel_order(backstop):
+            fill = self.om.get_fill(backstop)
+            if fill is not None:
+                reason = "STOP_LOSS"          # the backstop is the stop
+                intended = pos["stop_loss"]
+                logger.warning("Backstop %s beat the monitor to the exit "
+                               "for #%d — reconciled, no market order sent",
+                               backstop, pos["id"])
+        if fill is None:
+            side = "SELL" if pos["side"] == "BUY" else "BUY"
+            fill = self.om.place_market_order(pos["symbol"], side,
+                                              pos["qty"], tag=reason)
         pnl = models.close_trade(pos["id"], fill.price, reason,
                                  db_path=self.db)
-        backstop = self._backstops.pop(pos["id"], None)
-        if backstop:
-            self.om.cancel_order(backstop)
         ev = CloseEvent(pos["id"], pos["symbol"], pos["side"], pos["qty"],
                         reason, intended, fill.price, pnl)
         if reason == "STOP_LOSS":

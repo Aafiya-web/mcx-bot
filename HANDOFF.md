@@ -86,65 +86,71 @@ paper mode costs ₹0 in API fees and the whole test suite runs offline.
 
 Read this before changing ANY behavior. Tags: 💸 = can lose money,
 🧨 = breaks silently, 🧠 = looks wrong but is deliberate — do not "fix".
+Entries marked **[FIXED 2026-07-07]** are implemented and tested
+(`tests/test_step14_hardening.py`); their text is kept so the reasoning
+isn't regressed away.
 
-- **L1 💸 The tick loop is single-threaded, and the live-data wiring as
-  shipped is NOT usable for Stage B yet.** `Engine.tick()` does stop
-  checks AND candle fetches AND agent evaluation on one thread. With
-  `LiveFeed`, `_scan_for_entries` would make ~20 HTTP calls (plus ~8s of
-  built-in politeness sleeps in `data/historical.py`) EVERY 3-second tick
-  — instant Angel rate limits (AB1010) and, far worse, stop checks
-  delayed by many seconds: the exact late-stop failure this project
-  exists to prevent. **Required fix before paper-on-live-data:** scan for
-  entries only on a new 15-min bar close (candle signals cannot change
-  mid-bar); per-tick work must be only LTP polls for open positions. If
-  evening slippage audits still degrade, move `monitor.check()` onto its
-  own 1s thread — it is self-contained by design. DO NOT "reduce load" by
-  increasing the tick interval; that trades stop latency for comfort.
-- **L2 💸 `LiveFeed.get_candles` computes fetch days assuming ~30 bars/day
-  for EVERY interval.** For `ONE_HOUR` with lookback 210 it fetches ~9
-  days ≈ 130 hourly bars — below the EMA-200 warmup — so GOLD's
-  `ema_trend` would silently never signal in live mode. Fix: a
-  bars-per-day map per interval (15-min ≈ 34, 1H ≈ 14.5 on MCX hours).
-- **L3 💸 Backtesting GOLD prints "No trades generated" — that is a
-  window-size artifact, not a broken strategy.** `backtest/engine.py`
-  slides a 250-bar 15-min window; resampled to 1H that is ~62 bars, below
-  EMA-200 warmup, so `ema_trend` never exits HOLD. Fix: LOOKBACK ≥ ~850
-  for hourly strategies, or feed the walker native 1H history. Don't
-  conclude the strategy fails the gate from this.
-- **L4 💸 Live SL-M backstop double-fire race — the riskiest unproven
-  path in the system.** On a stop breach the monitor fires a market exit,
-  then cancels the resting exchange SL-M. In a fast live market the
-  exchange backstop can fill FIRST; both fills = the position flips to an
-  unintended opposite position. Paper cannot exhibit this (one process,
-  sequential). Before live: reconcile — check the backstop's order status
-  and cancel-and-verify BEFORE firing the market exit, or exit by
-  modifying the backstop itself. Listed in §9.
+- **L1 💸 [FIXED 2026-07-07] The tick loop is single-threaded — entry
+  scans must stay off the per-tick path.** `Engine.tick()` does stop
+  checks AND candle fetches AND agent evaluation on one thread. Scanning
+  every tick with `LiveFeed` would mean ~20 HTTP calls per 3s tick —
+  Angel rate limits (AB1010) and stop checks delayed by seconds: the
+  exact late-stop failure this project exists to prevent. **Fixed:** the
+  engine scans once per 15-min bucket (`_last_scan_bucket`); ticks
+  between bar closes do only LTP-level stop/equity work. If evening
+  slippage audits ever degrade, the next escalation is `monitor.check()`
+  on its own 1s thread (it is self-contained by design). DO NOT regress
+  this by scanning per tick, and DO NOT "reduce load" by increasing the
+  tick interval — that trades stop latency for comfort.
+- **L2 💸 [FIXED 2026-07-07] Fetch depth must be interval-aware.**
+  `LiveFeed.BARS_PER_DAY` translates lookback bars into fetch days per
+  interval (15-min ≈ 58/session, 1H ≈ 14.5, +40% holiday margin). The
+  original flat ~30-bars/day guess starved `ONE_HOUR` lookbacks below the
+  EMA-200 warmup, silently muting GOLD's strategy in live mode. If you
+  add an interval, add its row.
+- **L3 💸 [FIXED 2026-07-07] Hourly strategies need a bigger backtest
+  window.** `backtest.engine.lookback_for(timeframe)` gives 900 15-min
+  bars to `ONE_HOUR` strategies (≈225 hourly bars, clearing EMA-200
+  warmup) and 250 to intraday ones; `scripts/backtest.py` applies it per
+  instrument. With the old flat 250, GOLD printed "No trades generated" —
+  a window artifact that looked like a broken strategy.
+- **L4 💸 [FIXED in code, VERIFY on broker] SL-M backstop double-fire
+  race.** On any close the monitor now cancels the resting backstop
+  FIRST; if the cancel is rejected (the exchange already executed it),
+  it reconciles via `OrderManager.get_fill()` and does NOT fire its own
+  market exit — the backstop's fill IS the exit. Without this, a fast
+  market could fill both and flip the position. The paper race is tested
+  (`test_backstop_fill_is_reconciled_not_doubled`); the LIVE half depends
+  on Angel order-book field names (`LiveExecutor.get_fill`) — still in
+  §9's verify list. Never reorder _close back to exit-then-cancel.
 - **L5 🧨 `PaperExecutor.process_pending()` is never called by the engine
   — deliberately.** The monitor fires stops itself and cancels the
   backstop. If you see "stuck PENDING orders" and wire process_pending
   into the loop, every stop will exit TWICE (monitor exit + phantom
   backstop fill). It exists for tests and future multi-process designs.
-- **L6 🧨 Daily limits do not survive restarts and are never reset at
-  day boundaries.** `DailyLimitTracker` is in-memory: a restart mid-day
-  zeroes `daily_pnl` (a crash after heavy losses re-arms the full daily
-  budget — unsafe direction), and nothing calls `reset()` at date change,
-  so across a multi-day run the loss counter accumulates until it blocks
-  trading forever (safe direction, still wrong). Fix: persist
-  `daily_pnl`/`trades_today` in `bot_state` keyed by IST date; reset on
-  date change inside `tick()`.
-- **L7 🧨 The circuit breaker's equity PEAK is in-memory (the halt flag
-  is not).** After a restart the guard re-arms from current equity, so a
-  slow bleed punctuated by restarts may never trip the breaker. Fix:
-  persist `equity_peak` in `bot_state`, restore in
-  `PortfolioGuard.__init__`, clear it only in `manual_reset()`.
-- **L8 🧨 Contract rollover is implemented but UNWIRED.** Nothing calls
-  `needs_rollover`/`rollover_position`; `run_bot.py` resolves tokens once
-  at startup; `ctx.days_to_expiry` is always `None` in the engine, so the
-  risk team's expiry veto/halving NEVER fires today. Wire: a daily 09:05
-  check (per the mcx-contract-monitor skill) that re-resolves contracts,
-  rolls open positions, calls `LiveFeed.update_token()`, and feeds
-  `days_to_expiry` into the context. Until then, do not hold live
-  positions into expiry week.
+- **L6 🧨 [FIXED 2026-07-07] Daily limits persist and reset at day
+  boundaries.** The engine builds `DailyLimitTracker(persist=True)`:
+  counters live in `bot_state` (key `daily_tracker`), so a crash after
+  heavy losses can no longer re-arm the full daily budget; `tick()` calls
+  `roll_date()` so counters reset at the IST date change instead of
+  accumulating forever. Plain in-memory behavior remains the default for
+  ad-hoc/test construction — don't flip that default.
+- **L7 🧨 [FIXED 2026-07-07] The circuit breaker's equity peak persists
+  like its halt flag** (`bot_state.equity_peak`), so a slow bleed
+  punctuated by restarts still trips the breaker. Cleared ONLY by
+  `manual_reset()` / `scripts/clear_halt.py` — which now also resets the
+  peak so the breaker re-arms from post-review equity.
+- **L8 🧨 [FIXED in code, VERIFY on broker] Rollover and expiry are
+  wired.** `run_bot.ContractBook` is the ONLY place that knows contract
+  months: `LiveExecutor` gets `contract_fn` (base name → active
+  tradingsymbol+token — live orders now carry the real contract symbol),
+  the engine gets `expiry_fn` (refreshed daily in `tick()`, feeds
+  `ctx.days_to_expiry`, so the risk team's expiry veto/halving actually
+  fires), and a daily 09:05 job rolls positions:
+  close-in-old-month → `switch_fn` re-points the book/tokens → reopen
+  same BASE symbol in the new month. Positions stay keyed by base names
+  everywhere — do not store contract months in the trades table. The
+  live path (searchScrip fields, real fills) is in §9's verify list.
 - **L9 🧨 Parameter adaptation does not survive restarts — by design,
   but the logs will confuse you.** `apply_param` mutates module globals;
   a restart reverts to defaults while `param_changes` says otherwise.
@@ -354,10 +360,13 @@ Telegram (optional): set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`. Commands:
 - MCX seasonal close time (23:30 vs 23:55) each March/November.
 - Finnhub event timezone is UTC (landmine L11): confirm EIA crude shows
   ~20:00 IST on a Wednesday via `ts_ist()` with the real key.
-- SL-M backstop double-fire reconciliation (landmine L4) is IMPLEMENTED
-  and tested before the first live order — not optional.
-- `LiveFeed` interval-aware fetch depth (landmine L2) fixed before
-  trusting any 1H strategy in live/paper-live mode.
+- L4 broker half: `LiveExecutor.get_fill` order-book field names
+  (orderid/status/averageprice/filledshares) against current SmartAPI
+  docs, then prove the cancel-reject → reconcile path on ONE minimum-size
+  live order before trusting it.
+- L8 broker half: `searchScrip` response fields used by
+  `get_active_contract`/`get_next_contract`, and one real rollover
+  walked through manually the first time it triggers.
 
 ## 10. Paper → Live runbook (the owner executes this, never the bot)
 
@@ -409,12 +418,12 @@ static table (added 2026-07-07):
 
 ## 12. Known gaps / deferred work
 
-**MUST-FIX before Stage B (paper against live data)** — details in §3b:
-L1 (scan-on-bar-close + fast stop loop), L2 (interval-aware fetch depth),
-L6 (persist + daily-reset the loss tracker), L7 (persist the equity peak),
-L8 (wire rollover + days_to_expiry). These are deliberate scope cuts, not
-oversights: the mock-data pipeline never exercises them, so they were
-documented instead of half-built.
+**Update 2026-07-07:** the former MUST-FIX-before-Stage-B block
+(L1/L2/L3/L6/L7/L8) is implemented and tested — see the [FIXED] tags in
+§3b and `tests/test_step14_hardening.py`. What remains before Stage B is
+credentials-only; what remains before LIVE is the §9 verify list, notably
+the broker-side halves of L4 (order-book reconciliation fields) and L8
+(searchScrip contract resolution), which cannot be proven offline.
 
 - `.mcp.json` + MCP connectors (n8n, Drive, Gmail, Calendar, Netlify) were in
   the original spec but the file was never provided; not required for trading.

@@ -20,8 +20,17 @@ from core.regime import classify_regime
 from risk.position_sizing import position_size
 
 COMMISSION_PER_SIDE = 20.0     # ₹, Angel One flat
-LOOKBACK = 250                 # bars of context per step (speed + realism)
+# Bars of 15-min context per step. Landmine L3: hourly strategies (EMA
+# 50/200 on 1H) need ~202 hourly bars = ~850 15-min bars in the window or
+# they never exit warmup and the backtest prints "No trades generated".
+LOOKBACK = 250                 # intraday (15-min) strategies
+LOOKBACK_HOURLY = 900          # strategies that trade the 1H timeframe
 WARMUP = 60
+
+
+def lookback_for(timeframe: str) -> int:
+    """Window size for an instrument's configured strategy timeframe."""
+    return LOOKBACK_HOURLY if timeframe == "ONE_HOUR" else LOOKBACK
 
 
 @dataclass
@@ -43,16 +52,18 @@ def _slip(price: float, side: str) -> float:
 
 
 def run_backtest(df15: pd.DataFrame, strategy, symbol: str,
-                 capital: float | None = None) -> pd.DataFrame:
+                 capital: float | None = None,
+                 lookback: int = LOOKBACK) -> pd.DataFrame:
     """df15: full-history 15-min OHLCV. strategy: strategies.router object
-    (already regime-gated). Returns a trades DataFrame."""
+    (already regime-gated). Use lookback=lookback_for(timeframe) so hourly
+    strategies get a large enough window (L3). Returns a trades DataFrame."""
     capital = capital or settings.PAPER_CAPITAL
     point_value = POINT_VALUES[symbol]
     trades: list[BtTrade] = []
     position: dict | None = None
 
     for i in range(WARMUP, len(df15)):
-        window = df15.iloc[max(0, i - LOOKBACK): i + 1]
+        window = df15.iloc[max(0, i - lookback): i + 1]
         now = df15.index[i].to_pydatetime()
         bar = df15.iloc[i]
 

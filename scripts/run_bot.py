@@ -6,7 +6,11 @@
 Wiring: preflight -> feed (LiveFeed with credentials, MockFeed without,
 so a fresh checkout always runs) -> order manager via the paper/live gate
 -> engine + dashboard thread + Telegram command poller -> real-time loop
-with once-a-day morning/evening briefings.
+with once-a-day briefings and contract maintenance (expiry + rollover).
+
+Contract months exist ONLY here (ContractBook) and at the execution
+boundary; the engine, strategies, and DB all trade base names (see
+HANDOFF.md landmine L8).
 """
 
 import logging
@@ -20,11 +24,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from broker.order_manager import get_order_manager       # noqa: E402
 from config import settings                               # noqa: E402
-from config.symbols import ACTIVE_SYMBOLS, active_symbol  # noqa: E402
+from config.symbols import ACTIVE_SYMBOLS, active_symbol, base_of  # noqa: E402
 from core.engine import Engine                            # noqa: E402
 from database import models                               # noqa: E402
 from notifications import briefings                       # noqa: E402
 from notifications.commands import start_command_poller   # noqa: E402
+from notifications.telegram import send_error             # noqa: E402
+from positions.rollover import (get_active_contract, get_next_contract,  # noqa: E402
+                                needs_rollover, rollover_position)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,58 +43,100 @@ logger = logging.getLogger("run_bot")
 
 MORNING_AT = dtime(7, 30)
 EVENING_AT = dtime(23, 45)
+CONTRACT_MAINT_AT = dtime(9, 5)   # daily expiry check (contract skill)
 
 
-def build_feed():
-    have_creds = all([settings.ANGEL_API_KEY, settings.ANGEL_CLIENT_ID,
-                      settings.ANGEL_PASSWORD, settings.ANGEL_TOTP_KEY])
-    if have_creds:
-        from broker.auto_login import get_api
-        from data.feed import LiveFeed
-        from positions.rollover import get_active_contract
-        api = get_api()
-        token_map = {}
+def _have_creds() -> bool:
+    return all([settings.ANGEL_API_KEY, settings.ANGEL_CLIENT_ID,
+                settings.ANGEL_PASSWORD, settings.ANGEL_TOTP_KEY])
+
+
+class ContractBook:
+    """Active futures contract per traded symbol (live mode only)."""
+
+    def __init__(self, api):
+        self.api = api
+        self.contracts: dict[str, dict] = {}   # traded symbol -> contract
+
+    def refresh(self) -> None:
         for base in ACTIVE_SYMBOLS:
-            contract = get_active_contract(api, active_symbol(base))
-            token_map[active_symbol(base)] = contract["token"]
-            logger.info("%s -> %s (token %s, %dd to expiry)", base,
-                        contract["symbol"], contract["token"],
-                        contract["days_to_expiry"])
-        return LiveFeed(token_map)
+            symbol = active_symbol(base)
+            c = get_active_contract(self.api, symbol)
+            self.contracts[symbol] = c
+            logger.info("%s -> %s (token %s, %dd to expiry)", symbol,
+                        c["symbol"], c["token"], c["days_to_expiry"])
 
-    if settings.LIVE_TRADING:
-        raise settings.ConfigError(
-            "LIVE_TRADING=true but Angel One credentials are missing")
-    logger.warning("No Angel One credentials — using synthetic MockFeed. "
-                   "Paper results on mock data prove the PIPELINE, not the "
-                   "strategies.")
-    from data.feed import MockFeed
-    return MockFeed(symbols=[active_symbol(b) for b in ACTIVE_SYMBOLS])
+    def set_contract(self, symbol: str, contract: dict) -> None:
+        self.contracts[symbol] = contract
+
+    def contract_fn(self, symbol: str) -> tuple[str, str]:
+        """For LiveExecutor: base/traded name -> (tradingsymbol, token)."""
+        c = self.contracts[symbol]
+        return c["symbol"], c["token"]
+
+    def token_map(self) -> dict[str, str]:
+        return {sym: c["token"] for sym, c in self.contracts.items()}
+
+    def expiry_days(self) -> dict[str, int]:
+        """Keyed by BASE symbol, as the engine context expects."""
+        return {base_of(sym): c["days_to_expiry"]
+                for sym, c in self.contracts.items()}
 
 
-def _briefing_loop(engine):
-    """Fire the two daily briefings, once each per day."""
+def _contract_maintenance(engine, feed, book: ContractBook) -> None:
+    """Once per day at 09:05: roll positions near expiry, re-resolve all
+    contracts/tokens, refresh the engine's expiry map."""
+    for pos in models.get_open_positions(engine.db):
+        sym = pos["symbol"]
+        contract = book.contracts.get(sym)
+        if contract is None:
+            continue
+        if not needs_rollover(base_of(sym), contract["days_to_expiry"]):
+            continue
+        next_c = get_next_contract(book.api, sym)
+        rollover_position(
+            engine.monitor, base_of(sym), pos, next_c,
+            # switch between close (old month) and reopen (new month):
+            switch_fn=lambda s=sym, nc=next_c: (
+                book.set_contract(s, nc),
+                feed.update_token(s, nc["token"])))
+
+    book.refresh()                     # picks up post-roll active months
+    for sym, c in book.contracts.items():
+        feed.update_token(sym, c["token"])
+    engine.expiry_days = book.expiry_days()
+
+
+def _daily_jobs_loop(engine, feed=None, book=None) -> None:
+    """Fire each daily job once per day after its scheduled time. Job
+    completion is recorded in bot_state so restarts don't re-fire."""
+    def _morning():
+        engine.calendar.refresh()      # fresh calendar for the new day
+        return briefings.send_morning_briefing(
+            engine.db, expiry_days=engine.expiry_days,
+            calendar=engine.calendar)
+
+    jobs = [("last_morning", MORNING_AT, _morning),
+            ("last_evening", EVENING_AT,
+             lambda: briefings.send_evening_report(engine.db))]
+    if book is not None:
+        jobs.append(("last_contract_maint", CONTRACT_MAINT_AT,
+                     lambda: _contract_maintenance(engine, feed, book)))
+
     while True:
         now = datetime.now()
-        def _morning():
-            engine.calendar.refresh()  # fresh calendar for the new day
-            return briefings.send_morning_briefing(
-                engine.db, calendar=engine.calendar)
-
-        for key, at, fire in (
-            ("last_morning", MORNING_AT, _morning),
-            ("last_evening", EVENING_AT,
-             lambda: briefings.send_evening_report(engine.db)),
-        ):
+        for key, at, fire in jobs:
             if (now.time() >= at
                     and models.get_state(key, "", engine.db)
                     != now.date().isoformat()):
                 try:
                     fire()
                     models.set_state(key, now.date().isoformat(), engine.db)
-                    logger.info("Sent %s briefing", key)
+                    logger.info("Daily job done: %s", key)
                 except Exception as exc:
-                    logger.error("briefing failed: %s", exc)
+                    logger.error("daily job %s failed: %s", key, exc,
+                                 exc_info=True)
+                    send_error(f"daily job {key}", str(exc))
         time.sleep(60)
 
 
@@ -95,17 +144,34 @@ def main() -> int:
     settings.validate_live_config()  # hard refusal if live + unconfigured
     models.init_db()
 
-    feed = build_feed()
-    om = get_order_manager(feed.get_ltp)
-    engine = Engine(feed, om)
+    book = None
+    if _have_creds():
+        from broker.auto_login import get_api
+        from data.feed import LiveFeed
+        book = ContractBook(get_api())
+        book.refresh()
+        feed = LiveFeed(book.token_map())
+        om = get_order_manager(feed.get_ltp, contract_fn=book.contract_fn)
+        engine = Engine(feed, om, expiry_fn=book.expiry_days)
+    else:
+        if settings.LIVE_TRADING:
+            raise settings.ConfigError(
+                "LIVE_TRADING=true but Angel One credentials are missing")
+        logger.warning("No Angel One credentials — using synthetic "
+                       "MockFeed. Paper results on mock data prove the "
+                       "PIPELINE, not the strategies.")
+        from data.feed import MockFeed
+        feed = MockFeed(symbols=[active_symbol(b) for b in ACTIVE_SYMBOLS])
+        om = get_order_manager(feed.get_ltp)
+        engine = Engine(feed, om)
 
     from dashboard.app import start_dashboard_thread
     start_dashboard_thread()
     logger.info("Dashboard on http://%s:%s", settings.DASHBOARD_HOST,
                 settings.DASHBOARD_PORT)
     start_command_poller(engine)
-    threading.Thread(target=_briefing_loop, args=(engine,), daemon=True,
-                     name="briefings").start()
+    threading.Thread(target=_daily_jobs_loop, args=(engine, feed, book),
+                     daemon=True, name="daily-jobs").start()
 
     engine.run_live_loop(interval_secs=3.0)
     return 0

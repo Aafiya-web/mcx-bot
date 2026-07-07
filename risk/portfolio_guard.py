@@ -25,8 +25,11 @@ class PortfolioGuard:
         self.max_drawdown_pct = (max_drawdown_pct
                                  if max_drawdown_pct is not None
                                  else settings.MAX_DRAWDOWN_PCT)
-        self.equity_peak: float | None = None
         self._db_path = db_path
+        # Landmine L7 fix: the peak persists like the halt flag, so a
+        # restart cannot quietly re-arm the breaker from a lower equity.
+        raw = models.get_state("equity_peak", "", db_path)
+        self.equity_peak: float | None = float(raw) if raw else None
 
     @property
     def halted(self) -> bool:
@@ -41,6 +44,7 @@ class PortfolioGuard:
         """Call on every equity change. Returns True if trading is halted."""
         if self.equity_peak is None or equity > self.equity_peak:
             self.equity_peak = equity
+            models.set_state("equity_peak", str(equity), self._db_path)
         if self.halted:
             return True
         if self.max_drawdown_pct is None:
@@ -74,6 +78,7 @@ class PortfolioGuard:
         scripts/clear_halt.py — never by the bot itself."""
         models.set_halted(False, self._db_path)
         self.equity_peak = None
+        models.set_state("equity_peak", "", self._db_path)
         logger.warning("Halt flag manually cleared — trading may resume")
 
     def status(self, equity: float) -> str:

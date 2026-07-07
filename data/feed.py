@@ -169,14 +169,26 @@ class LiveFeed(Feed):
         data = _do()
         return float(data["data"]["ltp"])
 
+    # Approximate bars per MCX session (09:00-23:30 IST) by interval —
+    # used to translate a lookback in BARS into a fetch window in DAYS.
+    # Landmine L2: a flat 30-bars/day guess starved ONE_HOUR lookbacks.
+    BARS_PER_DAY = {
+        "FIVE_MINUTE": 174.0,
+        "FIFTEEN_MINUTE": 58.0,
+        "THIRTY_MINUTE": 29.0,
+        "ONE_HOUR": 14.5,
+        "ONE_DAY": 1.0,
+    }
+
     def get_candles(self, symbol: str, interval: str = "FIFTEEN_MINUTE",
                     lookback: int = 200) -> pd.DataFrame:
         from broker.auto_login import get_api
         from data.historical import fetch_ohlcv
         from data.store import save_candles
 
-        # ~34 15-min bars per MCX day; fetch generously then trim.
-        days = max(3, int(lookback / 30) + 2)
+        per_day = self.BARS_PER_DAY.get(interval, 14.5)
+        # +40% margin for weekends/holidays inside the calendar window.
+        days = max(3, int(lookback / per_day * 1.4) + 2)
         df = fetch_ohlcv(get_api(), self._tokens[symbol], interval, days)
         if not df.empty:
             save_candles(symbol, interval, df)

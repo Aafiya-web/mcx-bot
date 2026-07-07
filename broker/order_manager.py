@@ -29,7 +29,8 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 LtpFn = Callable[[str], float]          # symbol -> last traded price
-TokenFn = Callable[[str], str]          # symbol -> broker symboltoken
+# symbol (base name) -> (active contract tradingsymbol, symboltoken)
+ContractFn = Callable[[str], tuple[str, str]]
 
 
 @dataclass
@@ -57,6 +58,14 @@ class OrderManager:
         raise NotImplementedError
 
     def cancel_order(self, order_id: str) -> bool:
+        """True if the order was still resting and is now cancelled;
+        False if it no longer rests (already executed/unknown) — in that
+        case the caller MUST reconcile via get_fill (landmine L4)."""
+        raise NotImplementedError
+
+    def get_fill(self, order_id: str) -> Fill | None:
+        """Fill details for an executed order, or None if it never
+        executed. Used to reconcile a backstop that beat us to the exit."""
         raise NotImplementedError
 
 
@@ -131,17 +140,29 @@ class PaperExecutor(OrderManager):
     def cancel_order(self, order_id) -> bool:
         return self.pending.pop(order_id, None) is not None
 
+    def get_fill(self, order_id) -> Fill | None:
+        for fill in self.fills:
+            if fill.order_id == order_id and fill.status == "FILLED":
+                return fill
+        return None
+
 
 class LiveExecutor(OrderManager):
     """Real orders via Angel One. Only constructible when live is fully
-    configured — instantiation is the safety gate."""
+    configured — instantiation is the safety gate.
 
-    def __init__(self, token_fn: TokenFn, product: str = "INTRADAY"):
+    contract_fn maps an abstract symbol (base name, e.g. "CRUDEOIL") to
+    the ACTIVE futures contract: (tradingsymbol, symboltoken), e.g.
+    ("CRUDEOIL26AUGFUT", "424242"). The rest of the system trades base
+    names; only this boundary knows about contract months — which is what
+    makes rollover a pure re-mapping (landmine L8)."""
+
+    def __init__(self, contract_fn: "ContractFn", product: str = "INTRADAY"):
         if not settings.LIVE_TRADING:
             raise settings.ConfigError(
                 "LiveExecutor refused: LIVE_TRADING is false")
         settings.validate_live_config(live=True)  # raises if anything unset
-        self._token_fn = token_fn
+        self._contract_fn = contract_fn
         self._product = product
 
     def _build_params(self, symbol: str, side: str, qty: int,
@@ -150,10 +171,11 @@ class LiveExecutor(OrderManager):
         if not settings.ALGO_ID_TAG:
             raise settings.ConfigError(
                 "SEBI algo tag missing — live order refused")
+        tradingsymbol, token = self._contract_fn(symbol)
         params = {
             "variety": variety,                    # NORMAL / STOPLOSS
-            "tradingsymbol": symbol,
-            "symboltoken": self._token_fn(symbol),
+            "tradingsymbol": tradingsymbol,        # the ACTIVE contract
+            "symboltoken": token,
             "transactiontype": side,               # BUY / SELL
             "exchange": "MCX",
             "ordertype": ordertype,                # MARKET / STOPLOSS_MARKET
@@ -190,17 +212,50 @@ class LiveExecutor(OrderManager):
             trigger=trigger))
 
     def cancel_order(self, order_id) -> bool:
+        """False when the cancel is rejected — which for a STOPLOSS order
+        almost always means it already executed at the exchange. The
+        caller must then reconcile via get_fill (landmine L4)."""
         from broker.auto_login import get_api
-        get_api().cancelOrder(order_id, "NORMAL")
-        return True
+        try:
+            get_api().cancelOrder(order_id, "STOPLOSS")
+            return True
+        except Exception as exc:
+            logger.warning("cancel %s rejected (%s) — assuming it executed",
+                           order_id, exc)
+            return False
+
+    def get_fill(self, order_id) -> Fill | None:
+        """Look the order up in the day's order book.
+        VERIFY-BEFORE-LIVE: field names (orderid/status/averageprice/
+        filledshares) against current SmartAPI docs."""
+        from broker.auto_login import get_api, with_auth_retry
+
+        @with_auth_retry
+        def _book():
+            return get_api().orderBook()
+
+        for order in ((_book() or {}).get("data") or []):
+            if str(order.get("orderid")) != str(order_id):
+                continue
+            if str(order.get("status", "")).lower() != "complete":
+                return None
+            return Fill(str(order_id),
+                        str(order.get("tradingsymbol", "")),
+                        str(order.get("transactiontype", "")),
+                        int(order.get("filledshares")
+                            or order.get("quantity") or 0),
+                        float(order.get("averageprice") or 0.0),
+                        "FILLED",
+                        str(order.get("ordertag", "")))
+        return None
 
 
 def get_order_manager(ltp_fn: LtpFn,
-                      token_fn: TokenFn | None = None) -> OrderManager:
+                      contract_fn: ContractFn | None = None) -> OrderManager:
     """The paper->live gate. Paper unless live is enabled AND configured."""
     if settings.LIVE_TRADING:
         settings.validate_live_config(live=True)
         logger.warning("LIVE order manager active — real orders will be "
                        "placed, tagged %s", settings.ALGO_ID_TAG)
-        return LiveExecutor(token_fn)
+        return LiveExecutor(contract_fn)
     return PaperExecutor(ltp_fn)

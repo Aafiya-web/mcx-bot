@@ -64,7 +64,8 @@ def test_pause_flag_blocks_new_entries_only(engine, monkeypatch):
     engine.tick(datetime(2026, 7, 6, 10, 0))
     assert scans["n"] == 0
     models.set_state("paused", "0", engine.db)
-    engine.tick(datetime(2026, 7, 6, 10, 0))
+    # next 15-min bar (scans happen once per bar close — landmine L1)
+    engine.tick(datetime(2026, 7, 6, 10, 15))
     assert scans["n"] == 1
 
 

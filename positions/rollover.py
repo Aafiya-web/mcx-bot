@@ -61,10 +61,36 @@ def needs_rollover(base_symbol: str, contract_days_left: int) -> bool:
     return contract_days_left <= roll_days
 
 
+def get_next_contract(api, base_symbol: str,
+                      today: date | None = None) -> dict:
+    """The contract AFTER the currently-active one (rollover target)."""
+    today = today or date.today()
+    result = api.searchScrip("MCX", base_symbol)
+    valid = []
+    for inst in result.get("data", []):
+        expiry = parse_expiry(inst["tradingsymbol"])
+        if expiry and expiry > today:
+            valid.append({"symbol": inst["tradingsymbol"],
+                          "token": inst["symboltoken"], "expiry": expiry,
+                          "days_to_expiry": (expiry - today).days})
+    if len(valid) < 2:
+        raise LookupError(f"No next contract found for {base_symbol}")
+    return sorted(valid, key=lambda x: x["expiry"])[1]
+
+
 def rollover_position(monitor, base_symbol: str, position: dict,
-                      next_contract: dict) -> int | None:
-    """Close the expiring position and reopen the same exposure in the next
-    contract. Returns the new trade id (None when nothing to roll)."""
+                      next_contract: dict, switch_fn=None) -> int | None:
+    """Roll an open position into the next contract month.
+
+    Positions are stored under the BASE symbol; contract months exist only
+    at the execution boundary (LiveExecutor's contract_fn / LiveFeed
+    tokens). Sequence matters (landmine L8):
+      1. close the position while contract_fn still maps to the OLD
+         contract (the close order must reach the expiring month);
+      2. switch_fn() re-points contract_fn/tokens to next_contract;
+      3. reopen the SAME base symbol/side/qty — now resolving to the new
+         month. Returns the new trade id.
+    """
     from notifications.telegram import send_message
     from strategies.base import Signal
 
@@ -74,21 +100,23 @@ def rollover_position(monitor, base_symbol: str, position: dict,
     send_message(
         "🔄 <b>ROLLOVER</b>\n"
         f"Symbol : {base_symbol}\n"
-        f"Closing: {position['symbol']} ({position['qty']} lot(s))\n"
+        f"Closing: {position['qty']} lot(s) in the expiring contract\n"
         f"Opening: {next_contract['symbol']}"
     )
     monitor.close_position(position["id"], "ROLLOVER")
+    if switch_fn:
+        switch_fn()
 
-    # Same direction/size/levels, new contract symbol.
+    # Same base symbol, direction, size, and protective levels.
     sig = Signal(position["side"], position["strategy"] or "rollover",
                  entry=position["entry_price"],
                  stop_loss=position["stop_loss"],
                  target=position["take_profit"],
-                 reason=f"rolled from {position['symbol']}")
-    new_id = monitor.open_position(next_contract["symbol"], sig,
+                 reason=f"rolled into {next_contract['symbol']}")
+    new_id = monitor.open_position(position["symbol"], sig,
                                    position["qty"], mode=position["mode"])
-    logger.info("Rolled %s: trade #%d -> #%d", base_symbol,
-                position["id"], new_id)
+    logger.info("Rolled %s: trade #%d -> #%d (now %s)", base_symbol,
+                position["id"], new_id, next_contract["symbol"])
     return new_id
 
 

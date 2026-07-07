@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backtest.engine import (compute_metrics, format_report, go_no_go,  # noqa: E402
-                             run_backtest)
+                             lookback_for, run_backtest)
 from config import settings                                    # noqa: E402
 from config.symbols import ACTIVE_SYMBOLS, INSTRUMENTS, active_symbol  # noqa: E402
 from strategies.router import get_strategy                     # noqa: E402
@@ -62,7 +62,9 @@ def main() -> int:
             continue
         symbol = active_symbol(base)
         strategy = get_strategy(INSTRUMENTS[base]["strategy"])
-        trades = run_backtest(df, strategy, symbol)
+        trades = run_backtest(
+            df, strategy, symbol,
+            lookback=lookback_for(INSTRUMENTS[base]["timeframe"]))
         metrics = compute_metrics(trades, settings.PAPER_CAPITAL)
         print(format_report(symbol, INSTRUMENTS[base]["strategy"], metrics,
                             settings.PAPER_CAPITAL))

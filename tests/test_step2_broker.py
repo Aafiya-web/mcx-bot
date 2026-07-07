@@ -77,14 +77,14 @@ def test_factory_returns_paper_by_default(prices):
 
 def test_live_executor_refuses_paper_mode():
     with pytest.raises(settings.ConfigError, match="LIVE_TRADING is false"):
-        LiveExecutor(token_fn=lambda s: "123")
+        LiveExecutor(contract_fn=lambda s: (s, "123"))
 
 
 def test_live_executor_refuses_unconfigured(monkeypatch):
     monkeypatch.setattr(settings, "LIVE_TRADING", True)
     monkeypatch.setattr(settings, "INITIAL_CAPITAL", None)
     with pytest.raises(settings.ConfigError, match="LIVE mode refused"):
-        LiveExecutor(token_fn=lambda s: "123")
+        LiveExecutor(contract_fn=lambda s: (s, "123"))
 
 
 @pytest.fixture
@@ -96,19 +96,22 @@ def live(monkeypatch):
                       ("ANGEL_PASSWORD", "p"), ("ANGEL_TOTP_KEY", "t"),
                       ("ALGO_ID_TAG", "MCXBOT01")]:
         monkeypatch.setattr(settings, name, val)
-    return LiveExecutor(token_fn=lambda s: "424242")
+    # contract_fn maps the base name to the active contract month + token.
+    return LiveExecutor(
+        contract_fn=lambda s: ("CRUDEOIL26JULFUT", "424242"))
 
 
 def test_live_params_carry_algo_tag_and_mcx(live):
-    p = live._build_params("CRUDEOIL26JULFUT", "BUY", 1, "MARKET", "NORMAL")
+    p = live._build_params("CRUDEOIL", "BUY", 1, "MARKET", "NORMAL")
     assert p["ordertag"] == "MCXBOT01"
     assert p["exchange"] == "MCX"
+    assert p["tradingsymbol"] == "CRUDEOIL26JULFUT"  # the ACTIVE contract
     assert p["symboltoken"] == "424242"
     assert "triggerprice" not in p
 
 
 def test_live_sl_m_params(live):
-    p = live._build_params("CRUDEOIL26JULFUT", "SELL", 1,
+    p = live._build_params("CRUDEOIL", "SELL", 1,
                            "STOPLOSS_MARKET", "STOPLOSS", trigger=5950.0)
     assert p["ordertype"] == "STOPLOSS_MARKET"
     assert p["variety"] == "STOPLOSS"
@@ -118,7 +121,7 @@ def test_live_sl_m_params(live):
 def test_live_order_refused_without_algo_tag(live, monkeypatch):
     monkeypatch.setattr(settings, "ALGO_ID_TAG", "")
     with pytest.raises(settings.ConfigError, match="algo tag"):
-        live._build_params("CRUDEOIL26JULFUT", "BUY", 1, "MARKET", "NORMAL")
+        live._build_params("CRUDEOIL", "BUY", 1, "MARKET", "NORMAL")
 
 
 # ------------------------------------------------------------- auth module

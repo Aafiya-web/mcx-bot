@@ -60,14 +60,73 @@ def position_size(capital: float, symbol: str, entry: float,
 
 @dataclass
 class DailyLimitTracker:
-    """Daily loss ceiling + overtrading counter. reset() at session start."""
+    """Daily loss ceiling + overtrading counter.
+
+    Landmine L6 fix: with persist=True the state survives restarts via the
+    bot_state table (keyed by date), so a crash after losses cannot re-arm
+    the full daily budget; roll_date() resets at IST day boundaries — the
+    engine calls it every tick. Without persist (unit tests, ad-hoc use)
+    it behaves as a plain in-memory counter.
+    """
 
     capital: float
     max_loss_pct: float | None = None   # None (paper, unset) -> settings/2%
     daily_pnl: float = 0.0
     trades_today: int = 0
     consecutive_losses: int = 0
+    persist: bool = False
+    db_path: object = None
+    date: str = ""
     _default_pct: float = field(default=2.0, repr=False)
+
+    _STATE_KEY = "daily_tracker"
+
+    def __post_init__(self):
+        if self.persist:
+            self._load()
+
+    def _load(self) -> None:
+        import json
+        from database import models
+        raw = models.get_state(self._STATE_KEY, "", self.db_path)
+        if not raw:
+            return
+        try:
+            saved = json.loads(raw)
+            self.date = saved["date"]
+            self.daily_pnl = float(saved["daily_pnl"])
+            self.trades_today = int(saved["trades_today"])
+            self.consecutive_losses = int(saved["consecutive_losses"])
+        except Exception as exc:
+            logger.warning("daily tracker state unreadable (%s) — fresh "
+                           "counters", exc)
+
+    def _save(self) -> None:
+        if not self.persist:
+            return
+        import json
+        from database import models
+        models.set_state(self._STATE_KEY, json.dumps({
+            "date": self.date,
+            "daily_pnl": self.daily_pnl,
+            "trades_today": self.trades_today,
+            "consecutive_losses": self.consecutive_losses,
+        }), self.db_path)
+
+    def roll_date(self, today) -> None:
+        """Reset the counters when the (IST) date changes."""
+        iso = today.isoformat()
+        if self.date == iso:
+            return
+        if self.date:
+            logger.info("Daily limits reset: %s -> %s (prev P&L ₹%.0f, "
+                        "%d trades)", self.date, iso, self.daily_pnl,
+                        self.trades_today)
+        self.date = iso
+        self.daily_pnl = 0.0
+        self.trades_today = 0
+        self.consecutive_losses = 0
+        self._save()
 
     @property
     def limit(self) -> float:
@@ -89,6 +148,7 @@ class DailyLimitTracker:
 
     def record_entry(self) -> None:
         self.trades_today += 1
+        self._save()
 
     def record_close(self, pnl: float) -> None:
         self.daily_pnl += pnl
@@ -96,8 +156,10 @@ class DailyLimitTracker:
                                    else 0)
         if self.consecutive_losses >= 3:
             logger.warning("3+ consecutive losses — consider pausing")
+        self._save()
 
     def reset(self) -> None:
         self.daily_pnl = 0.0
         self.trades_today = 0
         self.consecutive_losses = 0
+        self._save()

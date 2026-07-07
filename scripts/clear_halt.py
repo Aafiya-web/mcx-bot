@@ -25,7 +25,9 @@ def main() -> int:
         print("Aborted — halt flag unchanged.")
         return 1
     models.set_halted(False)
-    print("Halt flag cleared. The bot may trade again on its next tick.")
+    models.set_state("equity_peak", "")  # re-arm the breaker from current equity
+    print("Halt flag cleared and equity peak reset. The bot may trade "
+          "again on its next tick.")
     return 0
 
 
