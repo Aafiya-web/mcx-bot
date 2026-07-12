@@ -65,6 +65,7 @@ class ContractBook:
             self.contracts[symbol] = c
             logger.info("%s -> %s (token %s, %dd to expiry)", symbol,
                         c["symbol"], c["token"], c["days_to_expiry"])
+            time.sleep(1.0)   # searchScrip rate-limits back-to-back calls
 
     def set_contract(self, symbol: str, contract: dict) -> None:
         self.contracts[symbol] = contract
@@ -149,7 +150,13 @@ def main() -> int:
         from broker.auto_login import get_api
         from data.feed import LiveFeed
         book = ContractBook(get_api())
-        book.refresh()
+        try:
+            book.refresh()
+        except Exception as exc:   # transient rate limit at boot: one retry
+            logger.warning("contract refresh failed (%s) — retrying in 30s",
+                           exc)
+            time.sleep(30)
+            book.refresh()
         feed = LiveFeed(book.token_map())
         om = get_order_manager(feed.get_ltp, contract_fn=book.contract_fn)
         engine = Engine(feed, om, expiry_fn=book.expiry_days)

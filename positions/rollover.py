@@ -62,11 +62,12 @@ def _is_contract_of(base_symbol: str, tradingsymbol: str) -> bool:
 
 def _search_scrip(api, symbol: str) -> dict:
     """searchScrip with the library's pretty-print suppressed — smartapi
-    dumps every matching instrument (thousands of option strikes) to
-    stdout, which would flood the journal on every daily refresh."""
+    dumps every matching instrument (thousands of option strikes), partly
+    via logzero on STDERR, which would flood the journal on every daily
+    refresh. Both streams must be muted."""
     import io
-    from contextlib import redirect_stdout
-    with redirect_stdout(io.StringIO()):
+    from contextlib import redirect_stderr, redirect_stdout
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
         return api.searchScrip("MCX", symbol)
 
 
