@@ -105,12 +105,21 @@ def _load_or_login():
                 SmartConnect = _smart_connect()
                 api = SmartConnect(api_key=settings.ANGEL_API_KEY)
                 api.setAccessToken(tokens["jwt"])
-                logger.info("Reusing cached token (%.1fh old)", age_hrs)
+                # A cached token must PROVE itself before we trust it —
+                # smartapi accepts setAccessToken() silently and only
+                # fails (AG8001) at the first real call, which crashed
+                # startup when a stale .tokens.json survived a restart.
+                profile = api.getProfile(tokens.get("refresh", ""))
+                if not (profile or {}).get("status"):
+                    raise ValueError(f"cached token rejected: "
+                                     f"{(profile or {}).get('message')}")
+                logger.info("Reusing cached token (%.1fh old, validated)",
+                            age_hrs)
                 return api
         except settings.ConfigError:
             raise
         except Exception as e:
-            logger.warning("Cached token unusable: %s", e)
+            logger.warning("Cached token unusable (%s) — fresh login", e)
     return login()
 
 
