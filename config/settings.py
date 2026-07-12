@@ -115,6 +115,10 @@ DASHBOARD_PORT = _int("DASHBOARD_PORT", "5001")  # Solana bot owns 5000
 DB_FILE = Path(os.getenv("DB_FILE", "").strip() or PROJECT_ROOT / "mcx_bot.db")
 LOG_DIR = PROJECT_ROOT / "logs"
 STATE_DIR = PROJECT_ROOT / "state"
+# A bare clone must run: these are gitignored at the content level, so
+# they may not exist (the systemd unit's FileHandler needs logs/ at boot).
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ------------------------------------------------------------------- gate
 

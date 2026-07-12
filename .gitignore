@@ -10,11 +10,13 @@
 *.db-shm
 
 # Runtime state (kill switch, halt flags)
-state/
+# NOTE: must be "state/*" not "state/" — ignoring the DIRECTORY makes the
+# .gitkeep negation unreachable (git never descends into ignored dirs).
+state/*
 !state/.gitkeep
 
 # Logs
-logs/
+logs/*
 !logs/.gitkeep
 
 # Python
