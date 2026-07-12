@@ -6,5 +6,7 @@ pandas>=2.2
 numpy>=1.26
 Flask>=3.0
 
-# Live broker connectivity only (not needed for paper/mock):
-#   pip install smartapi-python pyotp
+# Broker connectivity (lazy-imported; unused in mock mode but must be
+# installed — run_bot switches to LiveFeed the moment .env has creds):
+smartapi-python>=1.4
+pyotp>=2.9
