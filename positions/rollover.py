@@ -19,9 +19,21 @@ _MONTHS = {"JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
 
 
 def parse_expiry(tradingsymbol: str) -> date | None:
-    """CRUDEOIL26JULFUT -> approx expiry date (conservative: the 20th, so we
-    always roll early rather than late; exact dates come from the instrument
-    master in live mode)."""
+    """Expiry date from an Angel One futures tradingsymbol.
+
+    Current format (verified against live searchScrip, July 2026):
+    CRUDEOIL19AUG26FUT = DD MMM YY — the EXACT expiry day is embedded.
+    Legacy format CRUDEOIL26JULFUT (YY MMM) is kept as a fallback with a
+    conservative day-20 approximation (roll early, never late)."""
+    m = re.search(r"(\d{2})([A-Z]{3})(\d{2})FUT$", tradingsymbol)
+    if m:
+        day, mon, year = (int(m.group(1)), _MONTHS.get(m.group(2)),
+                          2000 + int(m.group(3)))
+        if mon:
+            try:
+                return date(year, mon, day)
+            except ValueError:
+                return None
     m = re.search(r"(\d{2})([A-Z]{3})FUT$", tradingsymbol)
     if not m:
         return None
@@ -38,14 +50,36 @@ def days_to_expiry(tradingsymbol: str, today: date | None = None) -> int | None:
     return (expiry - (today or date.today())).days
 
 
+def _is_contract_of(base_symbol: str, tradingsymbol: str) -> bool:
+    """True only for BASE's own futures — searchScrip('CRUDEOIL') also
+    returns CRUDEOILM (mini) contracts and thousands of option strikes;
+    picking a mini for a standard position would trade 1/10th the size."""
+    if not tradingsymbol.startswith(base_symbol):
+        return False
+    rest = tradingsymbol[len(base_symbol):]
+    return re.fullmatch(r"\d{2}[A-Z]{3}(\d{2})?FUT", rest) is not None
+
+
+def _search_scrip(api, symbol: str) -> dict:
+    """searchScrip with the library's pretty-print suppressed — smartapi
+    dumps every matching instrument (thousands of option strikes) to
+    stdout, which would flood the journal on every daily refresh."""
+    import io
+    from contextlib import redirect_stdout
+    with redirect_stdout(io.StringIO()):
+        return api.searchScrip("MCX", symbol)
+
+
 def get_active_contract(api, base_symbol: str,
                         today: date | None = None) -> dict:
     """Nearest non-expired contract via searchScrip (live only)."""
     today = today or date.today()
-    result = api.searchScrip("MCX", base_symbol)
+    result = _search_scrip(api, base_symbol)
     valid = []
     for inst in result.get("data", []):
         sym = inst["tradingsymbol"]
+        if not _is_contract_of(base_symbol, sym):
+            continue
         expiry = parse_expiry(sym)
         if expiry and expiry > today:
             valid.append({"symbol": sym, "token": inst["symboltoken"],
@@ -65,13 +99,16 @@ def get_next_contract(api, base_symbol: str,
                       today: date | None = None) -> dict:
     """The contract AFTER the currently-active one (rollover target)."""
     today = today or date.today()
-    result = api.searchScrip("MCX", base_symbol)
+    result = _search_scrip(api, base_symbol)
     valid = []
     for inst in result.get("data", []):
-        expiry = parse_expiry(inst["tradingsymbol"])
+        sym = inst["tradingsymbol"]
+        if not _is_contract_of(base_symbol, sym):
+            continue
+        expiry = parse_expiry(sym)
         if expiry and expiry > today:
-            valid.append({"symbol": inst["tradingsymbol"],
-                          "token": inst["symboltoken"], "expiry": expiry,
+            valid.append({"symbol": sym, "token": inst["symboltoken"],
+                          "expiry": expiry,
                           "days_to_expiry": (expiry - today).days})
     if len(valid) < 2:
         raise LookupError(f"No next contract found for {base_symbol}")

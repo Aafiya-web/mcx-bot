@@ -123,9 +123,23 @@ def test_close_all_squareoff(env):
 
 
 def test_parse_expiry():
+    # Current Angel format: DDMMMYY embeds the exact expiry day
+    assert ro.parse_expiry("CRUDEOIL19AUG26FUT") == date(2026, 8, 19)
+    assert ro.parse_expiry("GOLD05DEC26FUT") == date(2026, 12, 5)
+    # Legacy YYMMM format: conservative day-20 approximation
     assert ro.parse_expiry("CRUDEOIL26JULFUT") == date(2026, 7, 20)
     assert ro.parse_expiry("SILVERM26DECFUT") == date(2026, 12, 20)
     assert ro.parse_expiry("NOT_A_FUTURE") is None
+
+
+def test_contract_base_filter_excludes_minis_and_options():
+    assert ro._is_contract_of("CRUDEOIL", "CRUDEOIL19AUG26FUT")
+    assert ro._is_contract_of("CRUDEOILM", "CRUDEOILM19AUG26FUT")
+    assert ro._is_contract_of("CRUDEOIL", "CRUDEOIL26JULFUT")  # legacy
+    # The standard search must never pick the mini (different lot size)…
+    assert not ro._is_contract_of("CRUDEOIL", "CRUDEOILM19AUG26FUT")
+    # …or an option strike.
+    assert not ro._is_contract_of("CRUDEOIL", "CRUDEOIL16JUL2610000CE")
 
 
 def test_days_to_expiry_and_needs_rollover():
