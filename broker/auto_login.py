@@ -36,6 +36,17 @@ def _smart_connect():
             "smartapi-python is not installed — run: "
             "pip install smartapi-python pyotp"
         ) from e
+    # smartapi logs entire instrument dumps (thousands of lines) as single
+    # INFO records via logzero, flooding the journal on every searchScrip.
+    # logzero's handler holds the real stderr, so redirect_stderr can't
+    # catch it — silence it at the source, keep ERROR-level records.
+    try:
+        import logging as _logging
+
+        import logzero
+        logzero.loglevel(_logging.ERROR)
+    except Exception:
+        pass
     return SmartConnect
 
 
