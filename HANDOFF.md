@@ -355,8 +355,14 @@ Telegram (optional): set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`. Commands:
 - `MARGIN_PCT_ESTIMATE` vs the broker margin calculator.
 - `producttype` (INTRADAY vs CARRYFORWARD) and `ordertag` field name in
   `broker/order_manager.py:_build_params` vs current SmartAPI docs.
-- Exact expiry dates: `parse_expiry` approximates the 20th (rolls early —
-  safe); wire the instrument-master expiry when convenient.
+- ~~Exact expiry dates~~ VERIFIED 2026-07-12 against live searchScrip:
+  current Angel futures symbology is DDMMMYY (`CRUDEOIL20JUL26FUT`) and
+  `parse_expiry` reads the EXACT expiry day from it (legacy YYMMM format
+  kept as fallback with day-20 approximation). Also learned live:
+  searchScrip returns minis + option strikes (filtered by
+  `_is_contract_of`), rate-limits back-to-back calls (1s pacing in
+  ContractBook.refresh), and logs full instrument dumps via logzero
+  (capped at ERROR in `auto_login._smart_connect`).
 - MCX seasonal close time (23:30 vs 23:55) each March/November.
 - Finnhub event timezone is UTC (landmine L11): confirm EIA crude shows
   ~20:00 IST on a Wednesday via `ts_ist()` with the real key.
@@ -364,9 +370,14 @@ Telegram (optional): set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`. Commands:
   (orderid/status/averageprice/filledshares) against current SmartAPI
   docs, then prove the cancel-reject → reconcile path on ONE minimum-size
   live order before trusting it.
-- L8 broker half: `searchScrip` response fields used by
-  `get_active_contract`/`get_next_contract`, and one real rollover
-  walked through manually the first time it triggers.
+- L8 broker half: `searchScrip` response fields VERIFIED 2026-07-12
+  (exchange/tradingsymbol/symboltoken); still walk one real rollover
+  through manually the first time it triggers.
+- SEBI header note: smartapi-python sends a hardcoded default
+  `X-ClientPublicIP` (106.193.147.98) when detection fails — the actual
+  TCP source is the whitelisted static IP, but confirm with Angel One
+  whether the header must match; if so, patch the library's network
+  detection on the VM.
 
 ## 10. Paper → Live runbook (the owner executes this, never the bot)
 
