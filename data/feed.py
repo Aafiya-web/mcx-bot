@@ -182,14 +182,20 @@ class LiveFeed(Feed):
 
     def get_candles(self, symbol: str, interval: str = "FIFTEEN_MINUTE",
                     lookback: int = 200) -> pd.DataFrame:
-        from broker.auto_login import get_api
+        from broker.auto_login import get_api, with_auth_retry
         from data.historical import fetch_ohlcv
         from data.store import save_candles
 
         per_day = self.BARS_PER_DAY.get(interval, 14.5)
         # +40% margin for weekends/holidays inside the calendar window.
         days = max(3, int(lookback / per_day * 1.4) + 2)
-        df = fetch_ohlcv(get_api(), self._tokens[symbol], interval, days)
+
+        @with_auth_retry
+        def _do():
+            return fetch_ohlcv(get_api(), self._tokens[symbol], interval,
+                               days)
+
+        df = _do()
         if not df.empty:
             save_candles(symbol, interval, df)
         return df.tail(lookback)

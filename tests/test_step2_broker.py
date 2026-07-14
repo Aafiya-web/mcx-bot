@@ -151,3 +151,15 @@ def test_auth_retry_decorator_recovers(monkeypatch):
 
     assert flaky() == "ok"
     assert recovered["refresh"] == 1
+
+
+def test_is_auth_error_matches_real_world_shapes():
+    """Regression for 2026-07-13 (the blind Monday): the matcher missed
+    'Invalid Token' (capital T) and smartapi's KeyError('status')."""
+    from broker.auto_login import _is_auth_error
+
+    assert _is_auth_error(RuntimeError("Error: Invalid Token"))     # caps
+    assert _is_auth_error(RuntimeError("errorcode AG8001"))
+    assert _is_auth_error(KeyError("status"))                       # smartapi
+    assert not _is_auth_error(RuntimeError("network unreachable"))
+    assert not _is_auth_error(KeyError("data"))

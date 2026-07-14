@@ -1,0 +1,18 @@
+{
+	"folders": [
+		{
+			"name": "MCX Trading Bot",
+			"path": "."
+		}
+	],
+	"settings": {
+		"workbench.editor.enablePreview": false,
+		"files.exclude": {
+			"**/venv": true,
+			"**/__pycache__": true,
+			"**/.pytest_cache": true,
+			"**/*.db-shm": true,
+			"**/*.db-wal": true
+		}
+	}
+}

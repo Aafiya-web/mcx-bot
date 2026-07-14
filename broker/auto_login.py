@@ -165,7 +165,7 @@ def with_auth_retry(fn):
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
-                if "AG8001" in str(e) or "Invalid token" in str(e):
+                if _is_auth_error(e):
                     logger.warning("Auth error — recovering (attempt %d)",
                                    attempt + 1)
                     refresh_token() if attempt == 0 else login()
@@ -173,3 +173,17 @@ def with_auth_retry(fn):
                     raise
         return fn(*args, **kwargs)
     return wrapper
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    """Recognise an expired/invalid Angel session in ALL its costumes.
+
+    Learned live (2026-07-13, the day the bot went blind): the error text
+    is 'Invalid Token' (capital T — a case-sensitive match missed it),
+    and smartapi often surfaces auth failures as KeyError('status')
+    because it indexes the error response as if it succeeded.
+    """
+    err = str(exc).lower()
+    if "ag8001" in err or "invalid token" in err or "ag8002" in err:
+        return True
+    return isinstance(exc, KeyError) and "status" in err

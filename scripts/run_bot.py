@@ -43,6 +43,7 @@ logger = logging.getLogger("run_bot")
 
 MORNING_AT = dtime(7, 30)
 EVENING_AT = dtime(23, 45)
+RELOGIN_AT = dtime(8, 50)         # fresh session before MCX open (SEBI)
 CONTRACT_MAINT_AT = dtime(9, 5)   # daily expiry check (contract skill)
 
 
@@ -121,13 +122,20 @@ def _daily_jobs_loop(engine, feed=None, book=None) -> None:
             ("last_evening", EVENING_AT,
              lambda: briefings.send_evening_report(engine.db))]
     if book is not None:
+        # SEBI: Angel closes every session daily. Without this 08:50
+        # re-login the Monday session death of 2026-07-13 repeats: the
+        # boot-time JWT dies and the bot runs blind all day.
+        from broker.auto_login import login as angel_login
+        jobs.append(("last_relogin", RELOGIN_AT, angel_login))
         jobs.append(("last_contract_maint", CONTRACT_MAINT_AT,
                      lambda: _contract_maintenance(engine, feed, book)))
 
+    retry_after: dict[str, float] = {}   # failed-job backoff (15 min)
     while True:
         now = datetime.now()
         for key, at, fire in jobs:
             if (now.time() >= at
+                    and time.time() >= retry_after.get(key, 0.0)
                     and models.get_state(key, "", engine.db)
                     != now.date().isoformat()):
                 try:
@@ -135,8 +143,9 @@ def _daily_jobs_loop(engine, feed=None, book=None) -> None:
                     models.set_state(key, now.date().isoformat(), engine.db)
                     logger.info("Daily job done: %s", key)
                 except Exception as exc:
-                    logger.error("daily job %s failed: %s", key, exc,
-                                 exc_info=True)
+                    retry_after[key] = time.time() + 900
+                    logger.error("daily job %s failed (retry in 15 min): %s",
+                                 key, exc, exc_info=True)
                     send_error(f"daily job {key}", str(exc))
         time.sleep(60)
 

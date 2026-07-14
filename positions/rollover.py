@@ -67,8 +67,18 @@ def _search_scrip(api, symbol: str) -> dict:
     refresh. Both streams must be muted."""
     import io
     from contextlib import redirect_stderr, redirect_stdout
-    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-        return api.searchScrip("MCX", symbol)
+    try:
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return api.searchScrip("MCX", symbol)
+    except Exception as exc:
+        from broker.auto_login import _is_auth_error, login
+        if not _is_auth_error(exc):
+            raise
+        # Expired daily session (learned live 2026-07-13): re-login and
+        # retry once on a FRESH api object — the caller's is dead.
+        api = login()
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return api.searchScrip("MCX", symbol)
 
 
 def get_active_contract(api, base_symbol: str,
