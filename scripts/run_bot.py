@@ -109,6 +109,39 @@ def _contract_maintenance(engine, feed, book: ContractBook) -> None:
     engine.expiry_days = book.expiry_days()
 
 
+def _broker_init_with_patience() -> ContractBook:
+    """Login + contract resolution, surviving a broker outage.
+
+    Angel One's API went down mid-session on 2026-07-14 ('not found' from
+    the login endpoint itself); the old behavior crash-looped and hammered
+    their login every few seconds. Now: retry every 2 minutes for up to an
+    hour, telling the owner via Telegram (which doesn't depend on Angel),
+    before letting systemd take over at its own slow cadence.
+    """
+    from broker.auto_login import get_api
+    from notifications.telegram import send_message
+
+    last_exc: Exception | None = None
+    for attempt in range(30):
+        try:
+            book = ContractBook(get_api())
+            book.refresh()
+            if attempt > 0:
+                send_message("✅ Broker is back — bot connected and "
+                             "starting up.")
+            return book
+        except Exception as exc:
+            last_exc = exc
+            logger.error("broker init failed (attempt %d/30): %s",
+                         attempt + 1, exc)
+            if attempt == 0:
+                send_message("🚨 Cannot reach Angel One "
+                             f"({str(exc)[:120]}) — retrying every 2 min "
+                             "for up to an hour. No trading until then.")
+            time.sleep(120)
+    raise RuntimeError(f"broker unreachable for an hour: {last_exc}")
+
+
 def _daily_jobs_loop(engine, feed=None, book=None) -> None:
     """Fire each daily job once per day after its scheduled time. Job
     completion is recorded in bot_state so restarts don't re-fire."""
@@ -156,16 +189,8 @@ def main() -> int:
 
     book = None
     if _have_creds():
-        from broker.auto_login import get_api
         from data.feed import LiveFeed
-        book = ContractBook(get_api())
-        try:
-            book.refresh()
-        except Exception as exc:   # transient rate limit at boot: one retry
-            logger.warning("contract refresh failed (%s) — retrying in 30s",
-                           exc)
-            time.sleep(30)
-            book.refresh()
+        book = _broker_init_with_patience()
         feed = LiveFeed(book.token_map())
         om = get_order_manager(feed.get_ltp, contract_fn=book.contract_fn)
         engine = Engine(feed, om, expiry_fn=book.expiry_days)

@@ -22,7 +22,9 @@ Environment=TZ=Asia/Kolkata
 EnvironmentFile=-/home/ubuntu/mcx-trading-bot/.env
 ExecStart=/home/ubuntu/mcx-trading-bot/venv/bin/python scripts/run_bot.py
 Restart=always
-RestartSec=10
+# 60s between restarts: a boot-time crash must never hammer the broker's
+# login endpoint (run_bot also retries in-process for a full hour first).
+RestartSec=60
 # 1GB VM shared with the Solana bot — keep this bot on a leash.
 MemoryMax=350M
 Nice=5
