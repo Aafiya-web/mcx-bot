@@ -187,6 +187,15 @@ def main() -> int:
     settings.validate_live_config()  # hard refusal if live + unconfigured
     models.init_db()
 
+    # Dashboard FIRST: it reads only SQLite, and during a broker outage
+    # the status page is exactly what the owner needs while the broker
+    # init below waits (2026-07-14 outage: dashboard was unreachable for
+    # the whole wait because it started last).
+    from dashboard.app import start_dashboard_thread
+    start_dashboard_thread()
+    logger.info("Dashboard on http://%s:%s", settings.DASHBOARD_HOST,
+                settings.DASHBOARD_PORT)
+
     book = None
     if _have_creds():
         from data.feed import LiveFeed
@@ -205,11 +214,6 @@ def main() -> int:
         feed = MockFeed(symbols=[active_symbol(b) for b in ACTIVE_SYMBOLS])
         om = get_order_manager(feed.get_ltp)
         engine = Engine(feed, om)
-
-    from dashboard.app import start_dashboard_thread
-    start_dashboard_thread()
-    logger.info("Dashboard on http://%s:%s", settings.DASHBOARD_HOST,
-                settings.DASHBOARD_PORT)
     start_command_poller(engine)
     threading.Thread(target=_daily_jobs_loop, args=(engine, feed, book),
                      daemon=True, name="daily-jobs").start()

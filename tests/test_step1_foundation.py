@@ -180,6 +180,33 @@ def test_telegram_sends_when_configured(monkeypatch):
     assert tg.send_message("hello") is True
 
 
+def test_telegram_dedupe_cooldown(monkeypatch):
+    """Repeating alerts (broker outage loop) page the owner once, not 30x
+    an hour — regression for the 2026-07-14 Telegram flood."""
+    from notifications import telegram as tg
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "123")
+    monkeypatch.setattr(tg, "_last_sent", {})
+    calls = {"n": 0}
+
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {"ok": True}
+
+    def _post(*a, **k):
+        calls["n"] += 1
+        return _Resp()
+
+    monkeypatch.setattr(tg._SESSION, "post", _post)
+    assert tg.send_message("boom", dedupe_key="k1") is True
+    assert tg.send_message("boom again", dedupe_key="k1") is False  # deduped
+    assert calls["n"] == 1
+    assert tg.send_message("other", dedupe_key="k2") is True  # new key sends
+    assert tg.send_message("plain") is True                   # no key: always
+    assert calls["n"] == 3
+
+
 def test_telegram_retries_transient_failure(monkeypatch):
     from notifications import telegram as tg
     monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "token")

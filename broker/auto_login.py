@@ -93,7 +93,10 @@ def login():
                 "logged_at": time.time(),
             }))
             _api = api
-            send_message("✅ Angel One login successful")
+            # Deduped: the 08:50 login + validation re-logins would
+            # otherwise chirp several times a day.
+            send_message("✅ Angel One login successful",
+                         dedupe_key="angel-login-ok", cooldown_secs=6 * 3600)
             logger.info("Angel One login successful")
             return api
         except Exception as e:
@@ -102,7 +105,10 @@ def login():
             if attempt < 2:
                 time.sleep(5)
 
-    send_message(f"🚨 Angel One login FAILED after 3 attempts: {last_exc}")
+    # Deduped: during a broker outage the retry loop calls login() every
+    # couple of minutes — the owner gets paged once per half hour, not 30x.
+    send_message(f"🚨 Angel One login FAILED after 3 attempts: {last_exc}",
+                 dedupe_key="angel-login-failed")
     raise last_exc
 
 

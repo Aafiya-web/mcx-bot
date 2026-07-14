@@ -29,9 +29,28 @@ def enabled() -> bool:
     return bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID)
 
 
-def send_message(text: str, parse_mode: str = "HTML") -> bool:
+_last_sent: dict[str, float] = {}   # dedupe_key -> monotonic timestamp
+
+
+def send_message(text: str, parse_mode: str = "HTML",
+                 dedupe_key: str | None = None,
+                 cooldown_secs: float = 1800) -> bool:
     """Send a message; returns True on success. Silently no-ops when
-    Telegram is unconfigured (paper mode without a bot token is fine)."""
+    Telegram is unconfigured (paper mode without a bot token is fine).
+
+    dedupe_key: identical keys within cooldown_secs send only once —
+    a repeating failure (broker outage, crash-restart loop) must page the
+    owner ONCE, not thirty times an hour (learned 2026-07-14 when an
+    Angel outage flooded the owner's phone). Alert fatigue mutes bots.
+    """
+    if dedupe_key is not None:
+        now = time.monotonic()
+        last = _last_sent.get(dedupe_key)
+        if last is not None and now - last < cooldown_secs:
+            logger.debug("Telegram deduped (%s): %.60s", dedupe_key, text)
+            return False
+        _last_sent[dedupe_key] = now
+
     if not enabled():
         logger.debug("Telegram disabled — dropping message: %.80s", text)
         return False
@@ -73,4 +92,8 @@ def send_message(text: str, parse_mode: str = "HTML") -> bool:
 
 
 def send_error(context: str, error: str) -> bool:
-    return send_message(f"🚨 <b>MCX BOT ERROR</b>\n{context}\n<code>{error}</code>")
+    """Error alert, deduped per context: the first occurrence pages the
+    owner, repeats within 30 min only reach the log."""
+    return send_message(
+        f"🚨 <b>MCX BOT ERROR</b>\n{context}\n<code>{error}</code>",
+        dedupe_key=f"err:{context}")
