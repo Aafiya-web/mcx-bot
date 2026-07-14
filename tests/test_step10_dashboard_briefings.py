@@ -45,6 +45,23 @@ def test_index_renders(client):
     assert b"PAPER" in resp.data          # never LIVE in tests
 
 
+def test_api_candles_shape(client, seeded_db):
+    from data.store import save_candles
+    import pandas as pd
+    idx = pd.date_range("2026-07-14 09:00", periods=4, freq="15min",
+                        tz="Asia/Kolkata")
+    df = pd.DataFrame({"open": 1, "high": 2, "low": 0.5,
+                       "close": [7600.0, 7610.0, 7605.0, 7620.0],
+                       "volume": 10}, index=idx)
+    save_candles("CRUDEOIL", "FIFTEEN_MINUTE", df, db_path=seeded_db)
+
+    data = client.get("/api/candles?days=1").get_json()
+    assert len(data["symbols"]) == 5
+    assert [row[1] for row in data["series"]["CRUDEOIL"]] \
+        == [7600.0, 7610.0, 7605.0, 7620.0]     # oldest -> newest
+    assert data["series"]["GOLD"] == []          # no data, no crash
+
+
 def test_dashboard_auth_when_password_set(client, monkeypatch):
     import base64
 

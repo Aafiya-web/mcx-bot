@@ -99,6 +99,23 @@ def api_param_changes():
     return jsonify(_rows("SELECT * FROM param_changes ORDER BY id DESC"))
 
 
+@app.route("/api/candles")
+def api_candles():
+    """15-min closes per active symbol for the price charts.
+    ?days=1|2|5 (chart range presets; ~58 bars per MCX session)."""
+    from config.symbols import ACTIVE_SYMBOLS, active_symbol
+    days = max(1, min(int(request.args.get("days", 1)), 5))
+    series = {}
+    for base in ACTIVE_SYMBOLS:
+        sym = active_symbol(base)
+        rows = _rows(
+            "SELECT ts, close FROM candles WHERE symbol=? AND "
+            "interval='FIFTEEN_MINUTE' ORDER BY ts DESC LIMIT ?",
+            (sym, days * 58))
+        series[base] = [[r["ts"], r["close"]] for r in reversed(rows)]
+    return jsonify({"symbols": list(ACTIVE_SYMBOLS), "series": series})
+
+
 def start_dashboard_thread():
     """Run the dashboard as a daemon thread beside the engine."""
     import logging
