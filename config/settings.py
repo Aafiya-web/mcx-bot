@@ -109,6 +109,12 @@ PAPER_SLIPPAGE_PCT = _float("PAPER_SLIPPAGE_PCT", "0.05")
 
 DASHBOARD_HOST = os.getenv("DASHBOARD_HOST", "127.0.0.1").strip()
 DASHBOARD_PORT = _int("DASHBOARD_PORT", "5001")  # Solana bot owns 5000
+# Required to expose the dashboard beyond localhost (HTTP Basic Auth,
+# any username). Empty password forces DASHBOARD_HOST back to 127.0.0.1.
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "").strip()
+if not DASHBOARD_PASSWORD and DASHBOARD_HOST not in ("127.0.0.1",
+                                                     "localhost"):
+    DASHBOARD_HOST = "127.0.0.1"  # never public without a password
 
 # ------------------------------------------------------------------- paths
 

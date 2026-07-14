@@ -7,13 +7,29 @@ cannot trade. Started as a daemon thread by scripts/run_bot.py, or
 standalone:  venv\\Scripts\\python.exe -m dashboard.app
 """
 
+import hmac
 import sqlite3
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, Response, jsonify, render_template, request
 
 from config import settings
 
 app = Flask(__name__)
+
+
+@app.before_request
+def _require_auth():
+    """HTTP Basic Auth when DASHBOARD_PASSWORD is set. Without a password
+    the dashboard must never leave localhost — run_bot enforces that by
+    refusing to bind a public host (see _dashboard_host())."""
+    if not settings.DASHBOARD_PASSWORD:
+        return None
+    auth = request.authorization
+    if auth and hmac.compare_digest(auth.password or "",
+                                    settings.DASHBOARD_PASSWORD):
+        return None
+    return Response("Authentication required", 401,
+                    {"WWW-Authenticate": 'Basic realm="mcx-bot"'})
 
 
 def _rows(query: str, args: tuple = ()) -> list[dict]:

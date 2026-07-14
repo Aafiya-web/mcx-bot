@@ -45,6 +45,35 @@ def test_index_renders(client):
     assert b"PAPER" in resp.data          # never LIVE in tests
 
 
+def test_dashboard_auth_when_password_set(client, monkeypatch):
+    import base64
+
+    from config import settings as s
+    monkeypatch.setattr(s, "DASHBOARD_PASSWORD", "sekret")
+    assert client.get("/").status_code == 401           # no credentials
+    bad = {"Authorization": "Basic "
+           + base64.b64encode(b"x:wrong").decode()}
+    assert client.get("/", headers=bad).status_code == 401
+    good = {"Authorization": "Basic "
+            + base64.b64encode(b"anyuser:sekret").decode()}
+    assert client.get("/", headers=good).status_code == 200
+
+
+def test_public_host_refused_without_password(monkeypatch):
+    """settings falls back to loopback if a public bind has no password."""
+    import importlib
+
+    monkeypatch.setenv("DASHBOARD_HOST", "0.0.0.0")
+    monkeypatch.delenv("DASHBOARD_PASSWORD", raising=False)
+    from config import settings as s
+    importlib.reload(s)
+    try:
+        assert s.DASHBOARD_HOST == "127.0.0.1"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(s)
+
+
 def test_api_status(client):
     data = client.get("/api/status").get_json()
     assert data["mode"] == "PAPER"
