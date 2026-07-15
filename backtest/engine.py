@@ -51,6 +51,32 @@ def _slip(price: float, side: str) -> float:
     return price + s if side == "BUY" else price - s
 
 
+def _bt_may_hold(symbol: str, position: dict, bar_close: float,
+                 window: pd.DataFrame) -> bool:
+    """Backtest mirror of Engine._may_hold_overnight (minus the calendar,
+    which history doesn't carry): positional instrument, >= OVERNIGHT_MIN_R
+    profit cushion, 1H trend still pointing the position's way."""
+    from config.symbols import base_of
+    if base_of(symbol) not in settings.POSITIONAL_SYMBOLS:
+        return False
+    r_unit = abs(position["tp"] - position["entry"]) / 2.0
+    if r_unit <= 0:
+        return False
+    move = bar_close - position["entry"]
+    if position["side"] == "SELL":
+        move = -move
+    if move / r_unit < settings.OVERNIGHT_MIN_R:
+        return False
+    h1 = (window.resample("1h")
+          .agg({"open": "first", "high": "max", "low": "min",
+                "close": "last", "volume": "sum"}).dropna())
+    if len(h1) < 50:
+        return False
+    regime = classify_regime(h1)
+    want = "BULLISH" if position["side"] == "BUY" else "BEARISH"
+    return regime.adx >= 25 and regime.direction == want
+
+
 def run_backtest(df15: pd.DataFrame, strategy, symbol: str,
                  capital: float | None = None,
                  lookback: int = LOOKBACK) -> pd.DataFrame:
@@ -79,9 +105,15 @@ def run_backtest(df15: pd.DataFrame, strategy, symbol: str,
                 exit_price, reason = position["sl"], "STOP_LOSS"
             elif hit_tp:
                 exit_price, reason = position["tp"], "TAKE_PROFIT"
-            elif i == len(df15) - 1 or \
-                    df15.index[i + 1].date() != now.date():
+            elif i == len(df15) - 1:
+                # end of data: always book the trade
                 exit_price, reason = float(bar["close"]), "SQUAREOFF"
+            elif df15.index[i + 1].date() != now.date():
+                # session end: hold only when the trend earns it (same
+                # rule the live engine applies at 23:15)
+                if not _bt_may_hold(symbol, position, float(bar["close"]),
+                                    window):
+                    exit_price, reason = float(bar["close"]), "SQUAREOFF"
 
             if reason:
                 exit_side = "SELL" if is_long else "BUY"

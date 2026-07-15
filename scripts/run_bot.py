@@ -201,7 +201,13 @@ def main() -> int:
         from data.feed import LiveFeed
         book = _broker_init_with_patience()
         feed = LiveFeed(book.token_map())
-        om = get_order_manager(feed.get_ltp, contract_fn=book.contract_fn)
+        om = get_order_manager(
+            feed.get_ltp, contract_fn=book.contract_fn,
+            # Positional instruments order NRML so they CAN hold overnight;
+            # the hold decision itself happens at session end in the engine.
+            product_fn=lambda s: ("CARRYFORWARD"
+                                  if base_of(s) in settings.POSITIONAL_SYMBOLS
+                                  else "INTRADAY"))
         engine = Engine(feed, om, expiry_fn=book.expiry_days)
     else:
         if settings.LIVE_TRADING:

@@ -182,6 +182,23 @@ isn't regressed away.
 - **L14 🧠 MockFeed profitability is meaningless.** `paper_session.py`
   proves the plumbing; its win rate is noise from a synthetic random
   walk. Never quote it as evidence for the go/no-go gate.
+- **L16 💸 Overnight holds carry UNSTOPPABLE gap risk — that is the
+  price of positional mode (added 2026-07-16 at the owner's request).**
+  Between 23:30 and 09:00 IST no stop can fire anywhere; global markets
+  keep moving. Mitigations, all in `Engine._may_hold_overnight`: only
+  `POSITIONAL_SYMBOLS` (default GOLD, COPPER — the 1H trend
+  instruments), only with >= `OVERNIGHT_MIN_R` open profit (gaps eat
+  profit before capital), only while the 1H trend still points the
+  position's way, never before a scheduled event or within 4 days of
+  expiry, and ANY error in the check closes the position. The morning
+  gap exit goes through the normal stop path so slippage is audited,
+  not forgiven. DO NOT weaken the cushion to "hold more trades" — the
+  cushion IS the overnight risk budget. Live-mode notes: positional
+  instruments order CARRYFORWARD (NRML margin, ~2-4x intraday — margin
+  estimates in §4 assume MIS and MUST be revisited), and exchange SL-M
+  backstops are DAY orders that die at the close —
+  `monitor.refresh_backstops()` re-places them each morning (VERIFY
+  live, §9).
 - **L15 🧠 The correlation filter allows OPPOSITE-direction positions in
   the same cluster on purpose** (long CRUDEOIL + short NATURALGAS is a
   spread, not doubled exposure). Only same-direction stacking is blocked.
@@ -288,6 +305,8 @@ test in the step they belong to.
 | `PAPER_SLIPPAGE_PCT` | 0.05 | Simulated adverse fill % |
 | `EVENT_BLACKOUT_MINUTES` | 120 | No new entries on an instrument while one of its high-impact events is this close ahead |
 | `FINNHUB_API_KEY` | empty | Economic calendar source; empty = static weekly fallback |
+| `POSITIONAL_SYMBOLS` | GOLD,COPPER | Base symbols allowed to hold overnight when eligible (L16); empty = fully intraday |
+| `OVERNIGHT_MIN_R` | 0.5 | Open profit (R multiples) required before an overnight hold — the gap-risk cushion |
 
 Adaptation: ONLY params in `agents/reflection.py:PARAM_BOUNDS` can change, are
 clamped, and land in `param_changes` with old value + reason (rollback = set it
@@ -370,6 +389,9 @@ Telegram (optional): set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`. Commands:
   (orderid/status/averageprice/filledshares) against current SmartAPI
   docs, then prove the cancel-reject → reconcile path on ONE minimum-size
   live order before trusting it.
+- L16 broker half: CARRYFORWARD margin requirements per instrument vs
+  the MIS-based `MARGIN_PCT_ESTIMATE`, and that `refresh_backstops()`
+  actually lands a fresh SL-M each morning for a carried position.
 - L8 broker half: `searchScrip` response fields VERIFIED 2026-07-12
   (exchange/tradingsymbol/symboltoken); still walk one real rollover
   through manually the first time it triggers.

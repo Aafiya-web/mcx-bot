@@ -157,13 +157,17 @@ class LiveExecutor(OrderManager):
     names; only this boundary knows about contract months — which is what
     makes rollover a pure re-mapping (landmine L8)."""
 
-    def __init__(self, contract_fn: "ContractFn", product: str = "INTRADAY"):
+    def __init__(self, contract_fn: "ContractFn", product_fn=None):
         if not settings.LIVE_TRADING:
             raise settings.ConfigError(
                 "LiveExecutor refused: LIVE_TRADING is false")
         settings.validate_live_config(live=True)  # raises if anything unset
         self._contract_fn = contract_fn
-        self._product = product
+        # symbol -> INTRADAY (MIS, force-squared by broker at close) or
+        # CARRYFORWARD (NRML, may hold overnight; higher margin).
+        # Positional instruments MUST order CARRYFORWARD from entry —
+        # holding is decided at session end, long after the order type.
+        self._product_fn = product_fn or (lambda symbol: "INTRADAY")
 
     def _build_params(self, symbol: str, side: str, qty: int,
                       ordertype: str, variety: str,
@@ -179,7 +183,7 @@ class LiveExecutor(OrderManager):
             "transactiontype": side,               # BUY / SELL
             "exchange": "MCX",
             "ordertype": ordertype,                # MARKET / STOPLOSS_MARKET
-            "producttype": self._product,
+            "producttype": self._product_fn(symbol),
             "duration": "DAY",
             "quantity": qty,
             "ordertag": settings.ALGO_ID_TAG,      # SEBI: on EVERY order
@@ -251,11 +255,12 @@ class LiveExecutor(OrderManager):
 
 
 def get_order_manager(ltp_fn: LtpFn,
-                      contract_fn: ContractFn | None = None) -> OrderManager:
+                      contract_fn: ContractFn | None = None,
+                      product_fn=None) -> OrderManager:
     """The paper->live gate. Paper unless live is enabled AND configured."""
     if settings.LIVE_TRADING:
         settings.validate_live_config(live=True)
         logger.warning("LIVE order manager active — real orders will be "
                        "placed, tagged %s", settings.ALGO_ID_TAG)
-        return LiveExecutor(contract_fn)
+        return LiveExecutor(contract_fn, product_fn=product_fn)
     return PaperExecutor(ltp_fn)

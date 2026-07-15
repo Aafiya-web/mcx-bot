@@ -34,7 +34,12 @@ Weekly review checklist:
    - no trade with RR < 2 at entry;
    - no stop further from price than at entry (compare vs `initial_risk`);
    - no same-direction pair within a cluster open simultaneously;
-   - all positions closed by 23:15 IST daily.
+   - all positions closed by 23:15 IST daily — EXCEPT eligible overnight
+     holds on `POSITIONAL_SYMBOLS` (each must have a matching "HOLDING
+     OVERNIGHT" Telegram message stating the trend + cushion; any hold
+     without one is a violation);
+   - every morning-gap stop exit appears in that evening's slippage
+     audit (gaps are audited, never forgiven).
 4. **Metrics accumulating toward the gate:** win rate, PF, drawdown from
    `/api/performance` — logged weekly in a notebook/sheet.
 5. **Ops:** no unexplained restarts (`journalctl -u mcx-bot`), RAM inside

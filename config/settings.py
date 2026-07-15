@@ -78,6 +78,18 @@ FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "").strip()
 # is within this many minutes ahead (enforced in the risk gate chain).
 EVENT_BLACKOUT_MINUTES = _int("EVENT_BLACKOUT_MINUTES", "120")
 
+# ------------------------------------------------- positional (overnight)
+# BASE symbols allowed to HOLD overnight when the trend earns it — see
+# Engine._may_hold_overnight for the eligibility rules (1H trend intact,
+# profit cushion, no imminent event, not near expiry). Everything else,
+# and every ineligible position, squares off daily. Empty = fully intraday.
+POSITIONAL_SYMBOLS = [s.strip().upper() for s in
+                      os.getenv("POSITIONAL_SYMBOLS", "GOLD,COPPER")
+                      .split(",") if s.strip()]
+# Minimum open profit (in R multiples) before a position may be carried
+# overnight — the profit cushion that absorbs opening-gap risk.
+OVERNIGHT_MIN_R = float(os.getenv("OVERNIGHT_MIN_R", "0.5"))
+
 # SEBI: every live order must carry the registered algo tag.
 ALGO_ID_TAG = os.getenv("ALGO_ID_TAG", "").strip()
 

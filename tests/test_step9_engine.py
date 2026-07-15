@@ -143,6 +143,10 @@ def test_squareoff_flattens_open_positions(engine):
 def test_full_mock_session_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr("notifications.telegram.send_message",
                         lambda *a, **k: True)
+    # fully-intraday mode: the flat-at-end assertion below is only
+    # guaranteed when no instrument may hold overnight (step 15 tests
+    # cover the positional path separately)
+    monkeypatch.setattr("config.settings.POSITIONAL_SYMBOLS", [])
     db = tmp_path / "session.db"
     feed = MockFeed(n_bars=900, seed=42)  # all five instruments
     engine = Engine(feed, PaperExecutor(feed.get_ltp), db_path=db,

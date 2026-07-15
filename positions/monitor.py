@@ -122,6 +122,30 @@ class PositionMonitor:
         return [self._close(pos, reason, self.feed.get_ltp(pos["symbol"]))
                 for pos in models.get_open_positions(self.db)]
 
+    def refresh_backstops(self) -> int:
+        """Re-place the resting SL-M backstop for every open position.
+
+        Needed at each session start for positions carried overnight:
+        exchange SL-M orders are DAY validity and die at the close, so a
+        held position would otherwise face the new day with no exchange-
+        side safety net. Also heals backstop bookkeeping after a restart
+        (the id map is in-memory). Best-effort cancel of any stale order.
+        """
+        n = 0
+        for pos in models.get_open_positions(self.db):
+            old = self._backstops.pop(pos["id"], None)
+            if old:
+                self.om.cancel_order(old)   # stale/dead order: best effort
+            side = "SELL" if pos["side"] == "BUY" else "BUY"
+            backstop = self.om.place_sl_market_order(
+                pos["symbol"], side, pos["qty"], trigger=pos["stop_loss"],
+                tag="HARD_STOP_BACKSTOP")
+            self._backstops[pos["id"]] = backstop.order_id
+            n += 1
+        if n:
+            logger.info("Refreshed %d exchange backstop(s)", n)
+        return n
+
     # -------------------------------------------------------------- check
 
     def check(self) -> list[CloseEvent]:

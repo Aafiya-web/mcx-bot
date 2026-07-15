@@ -21,7 +21,7 @@ from datetime import datetime
 
 from config import settings
 from config.symbols import ACTIVE_SYMBOLS, INSTRUMENTS, POINT_VALUES, \
-    active_symbol
+    active_symbol, base_of
 from core import scheduler
 from data.economic_calendar import EconomicCalendar
 from core.orchestrator import Orchestrator
@@ -110,6 +110,13 @@ class Engine:
                 except Exception as exc:
                     logger.error("expiry refresh failed: %s", exc)
                     telegram.send_error("expiry refresh", str(exc))
+            # Positions carried overnight need fresh exchange backstops —
+            # SL-M orders are DAY validity and died at yesterday's close.
+            try:
+                self.monitor.refresh_backstops()
+            except Exception as exc:
+                logger.error("backstop refresh failed: %s", exc)
+                telegram.send_error("backstop refresh", str(exc))
 
         # 1. Manage what's open: stops fire here, on time, every tick.
         for ev in self.monitor.check():
@@ -122,13 +129,12 @@ class Engine:
                     self._on_close(ev)
             return  # halted: nothing else happens, today or any day
 
-        # 3. Session end: flatten everything once per day.
+        # 3. Session end: intraday positions flatten daily; positional
+        # instruments may hold overnight when the trend earns it.
         if scheduler.in_squareoff_zone(now):
-            if (self._squared_off_date != now.date()
-                    and models.get_open_positions(self.db)):
+            if self._squared_off_date != now.date():
                 self._squared_off_date = now.date()
-                for ev in self.monitor.close_all("SQUAREOFF"):
-                    self._on_close(ev)
+                self._end_of_session(now)
             return
 
         # 4. New entries — but only on a NEW 15-min bar (landmine L1).
@@ -153,6 +159,74 @@ class Engine:
             "scans": self.stats["scans"],
             "candidates": self.stats["candidates"],
             "approved": self.stats["approved"]}), self.db)
+
+    def _end_of_session(self, now: datetime) -> None:
+        """Square off every position that has not EARNED an overnight hold.
+        The default is always to close — holding is the exception, and any
+        error while judging eligibility fails toward closing."""
+        held = []
+        for pos in models.get_open_positions(self.db):
+            try:
+                ok, why = self._may_hold_overnight(pos, now)
+            except Exception as exc:
+                ok, why = False, f"eligibility check failed ({exc})"
+            if ok:
+                held.append(f"{pos['symbol']} {pos['side']} x{pos['qty']} "
+                            f"— {why}")
+                logger.info("Holding #%d overnight: %s", pos["id"], why)
+                continue
+            logger.info("Squareoff #%d (%s): %s", pos["id"],
+                        pos["symbol"], why)
+            ev = self.monitor.close_position(pos["id"], "SQUAREOFF")
+            if ev:
+                self._on_close(ev)
+        if held:
+            telegram.send_message("🌙 <b>HOLDING OVERNIGHT</b>\n"
+                                  + "\n".join(held))
+
+    def _may_hold_overnight(self, pos: dict, now: datetime):
+        """Overnight is a privilege with four conditions (all bounded,
+        all logged): positional instrument, profit cushion >= OVERNIGHT_MIN_R
+        (gaps eat into profit, not capital), 1H trend still intact in the
+        position's direction, and no high-impact event before the next
+        session could gap it. Near expiry always closes."""
+        base = base_of(pos["symbol"])
+        if base not in settings.POSITIONAL_SYMBOLS:
+            return False, "intraday instrument"
+
+        days = self.expiry_days.get(base)
+        if days is not None and days <= 4:
+            return False, f"{days}d to expiry — no overnight risk here"
+
+        r_unit = abs(pos["take_profit"] - pos["entry_price"]) / 2.0
+        if r_unit <= 0:
+            return False, "cannot derive R unit"
+        move = self.feed.get_ltp(pos["symbol"]) - pos["entry_price"]
+        if pos["side"] == "SELL":
+            move = -move
+        r_now = move / r_unit
+        if r_now < settings.OVERNIGHT_MIN_R:
+            return False, (f"profit {r_now:+.2f}R < "
+                           f"{settings.OVERNIGHT_MIN_R}R cushion")
+
+        df1h = self.feed.get_candles(pos["symbol"], "ONE_HOUR", 210)
+        if len(df1h) < 50:
+            return False, "insufficient 1H history"
+        regime = classify_regime(df1h)
+        want = "BULLISH" if pos["side"] == "BUY" else "BEARISH"
+        if regime.adx < 25 or regime.direction != want:
+            return False, (f"1H trend gone ({regime.regime}, "
+                           f"ADX {regime.adx:.0f}, {regime.direction})")
+
+        # Anything scheduled before tomorrow's open (+ blackout) can gap us.
+        overnight = self.calendar.upcoming_for(
+            base, now, window_minutes=12 * 60
+            + settings.EVENT_BLACKOUT_MINUTES)
+        if overnight:
+            return False, f"event overnight: {overnight[0].name}"
+
+        return True, (f"1H ADX {regime.adx:.0f} {regime.direction}, "
+                      f"{r_now:+.1f}R cushion")
 
     def _on_close(self, ev) -> None:
         self.realized += ev.pnl
