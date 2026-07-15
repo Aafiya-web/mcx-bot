@@ -15,6 +15,7 @@ Kill switches honored every tick, in order of severity:
     bot_state['paused']  — soft pause: manage open positions, no new entries
 """
 
+import json
 import logging
 from datetime import datetime
 
@@ -145,6 +146,13 @@ class Engine:
         self._last_scan_bucket = bucket
         self.stats["scans"] += 1
         self._scan_for_entries(now)
+        # Persist today's machinery counters for the evening report — the
+        # owner's daily proof that scanning is alive even on no-trade days.
+        models.set_state("scan_stats", json.dumps({
+            "date": now.date().isoformat(),
+            "scans": self.stats["scans"],
+            "candidates": self.stats["candidates"],
+            "approved": self.stats["approved"]}), self.db)
 
     def _on_close(self, ev) -> None:
         self.realized += ev.pnl

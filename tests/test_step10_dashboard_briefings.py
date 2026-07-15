@@ -76,6 +76,24 @@ def test_dashboard_auth_when_password_set(client, monkeypatch):
     assert client.get("/", headers=good).status_code == 200
 
 
+def test_evening_report_machinery_line(seeded_db):
+    import json
+    from datetime import date
+
+    from database import models
+    from notifications.briefings import generate_evening_report
+
+    models.set_state("scan_stats", json.dumps(
+        {"date": date.today().isoformat(), "scans": 34,
+         "candidates": 2, "approved": 1}), seeded_db)
+    text = generate_evening_report(seeded_db)
+    assert "34 scans · 2 candidates · 1 approved" in text
+
+    models.set_state("scan_stats", json.dumps(
+        {"date": "2020-01-01", "scans": 34}), seeded_db)  # stale
+    assert "NO SCANS RECORDED TODAY" in generate_evening_report(seeded_db)
+
+
 def test_dashboard_magic_link_sets_cookie(client, monkeypatch):
     """Phone bookmark flow: ?key= sets a long-lived cookie, then plain
     requests pass; wrong key stays locked out."""

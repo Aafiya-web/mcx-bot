@@ -113,10 +113,23 @@ def generate_evening_report(db_path=None, today: date | None = None) -> str:
     if not flags:
         flags.append("none")
 
+    import json as _json
+    try:
+        st = _json.loads(models.get_state("scan_stats", "{}", db_path))
+    except Exception:
+        st = {}
+    if st.get("date") == today.isoformat():
+        machinery = (f"{st.get('scans', 0)} scans · "
+                     f"{st.get('candidates', 0)} candidates · "
+                     f"{st.get('approved', 0)} approved")
+    else:
+        machinery = "⚠️ NO SCANS RECORDED TODAY — check the engine!"
+
     text = f"""🌙 MCX EVENING REPORT — {today.isoformat()}
 
 TODAY
 Trades: {len(trades)} | Net P&L: {_fmt_pnl(day['total'])}
+Machinery: {machinery}
 
 BEST : {fmt(best)}
 WORST: {fmt(worst)}
