@@ -47,6 +47,58 @@ def test_engine_tick_runs_clean(engine):
     assert engine.stats["ticks"] == 1
 
 
+def test_scan_survives_one_symbol_failing(engine, monkeypatch):
+    """A transient data failure on one instrument (Angel rate limit,
+    2026-07-15) must not abort the scan for the others."""
+    real = engine.feed.get_candles
+    seen = []
+
+    def flaky(symbol, interval="FIFTEEN_MINUTE", lookback=200):
+        seen.append(symbol)
+        if symbol == "CRUDEOIL":
+            raise RuntimeError(
+                "Couldn't parse the JSON response received from the "
+                "server: b'Access denied because of exceeding access rate'")
+        return real(symbol, interval, lookback)
+
+    monkeypatch.setattr(engine.feed, "get_candles", flaky)
+    engine._scan_for_entries(engine.feed.now)   # must not raise
+    assert "GOLD" in seen                       # second symbol still scanned
+
+
+def test_candle_fetch_backs_off_on_rate_limit(monkeypatch):
+    from data import historical as h
+
+    naps = []
+    monkeypatch.setattr(h.time, "sleep", lambda s: naps.append(s))
+    calls = {"n": 0}
+
+    class _Api:
+        def getCandleData(self, params):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise RuntimeError("Access denied because of exceeding "
+                                   "access rate")
+            return {"data": [["2026-07-15T10:00:00+05:30",
+                              1, 2, 0.5, 1.5, 10]]}
+
+    df = h.fetch_ohlcv(_Api(), "12345", "FIFTEEN_MINUTE", days=2)
+    assert len(df) == 1 and calls["n"] == 3     # two backoffs, then data
+    assert any(n >= 5 for n in naps)            # real waits, not spins
+
+
+def test_candle_fetch_raises_on_other_errors(monkeypatch):
+    from data import historical as h
+    monkeypatch.setattr(h.time, "sleep", lambda s: None)
+
+    class _Api:
+        def getCandleData(self, params):
+            raise RuntimeError("Invalid Token")
+
+    with pytest.raises(RuntimeError, match="Invalid Token"):
+        h.fetch_ohlcv(_Api(), "12345", "FIFTEEN_MINUTE", days=2)
+
+
 def test_halt_flag_stops_everything(engine, monkeypatch):
     models.set_halted(True, engine.db)
     scans = {"n": 0}

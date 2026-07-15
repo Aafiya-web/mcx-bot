@@ -169,56 +169,72 @@ class Engine:
             if symbol in held:
                 continue  # one position per instrument
 
-            df15 = self.feed.get_candles(symbol, "FIFTEEN_MINUTE", 200)
-            df1h = self.feed.get_candles(symbol, "ONE_HOUR", 210)
-            if len(df15) < 50:
+            try:
+                entered = self._scan_symbol(base, symbol, now, cal_today,
+                                            open_positions)
+            except Exception as exc:
+                # One symbol's transient data failure (Angel rate limit,
+                # network blip) must not abort the scan for the other four
+                # or fail the whole tick (2026-07-15 afternoon throttling).
+                logger.warning("scan %s failed, skipping this bar: %s",
+                               symbol, exc)
                 continue
-            regime = classify_regime(df15)
+            if entered:
+                open_positions = models.get_open_positions(self.db)
+                held = {p["symbol"] for p in open_positions}
 
-            ok, _ = volatility_ok(base, regime.atr_pct)
-            if not ok:
-                continue
+    def _scan_symbol(self, base: str, symbol: str, now: datetime,
+                     cal_today: list, open_positions: list) -> bool:
+        """Evaluate one instrument; True when a position was opened."""
+        df15 = self.feed.get_candles(symbol, "FIFTEEN_MINUTE", 200)
+        df1h = self.feed.get_candles(symbol, "ONE_HOUR", 210)
+        if len(df15) < 50:
+            return False
+        regime = classify_regime(df15)
 
-            signal = self.strategies[base].generate(df15, df1h, regime, now)
-            if signal.action not in ("BUY", "SELL"):
-                continue
+        ok, _ = volatility_ok(base, regime.atr_pct)
+        if not ok:
+            return False
 
-            # Candidate found -> the agentic layer deliberates.
-            self.stats["candidates"] += 1
-            vol_ratio = (float(df15["volume"].iloc[-1])
-                         / max(float(df15["volume"].iloc[-21:-1].mean()),
-                               1e-9))
-            ctx = DecisionContext(
-                symbol=symbol, signal=signal, regime=regime,
-                mtf=mtf_regime(self.feed, symbol),
-                volume_ratio=round(vol_ratio, 2),
-                open_positions=open_positions,
-                capital=self.capital, equity=self.equity,
-                days_to_expiry=self.expiry_days.get(base),
-                consecutive_losses=self.daily.consecutive_losses,
-                trades_today=self.daily.trades_today,
-                weekday=now.weekday(),
-                upcoming_events=self.calendar.upcoming_for(base, now),
-                events_today=[e.name for e in cal_today
-                              if base in e.symbols],
-                calendar_source=self.calendar.source or "",
-            )
-            decision = self.orchestrator.evaluate(ctx)
-            if not decision.approved:
-                continue
+        signal = self.strategies[base].generate(df15, df1h, regime, now)
+        if signal.action not in ("BUY", "SELL"):
+            return False
 
-            self.stats["approved"] += 1
-            self.monitor.open_position(symbol, signal, decision.lots,
-                                       mode="live" if settings.LIVE_TRADING
-                                       else "paper")
-            self.daily.record_entry()
-            open_positions = models.get_open_positions(self.db)
-            held = {p["symbol"] for p in open_positions}
-            telegram.send_message(
-                f"📈 <b>ENTRY</b> {signal.action} {symbol} "
-                f"x{decision.lots} @ ~₹{signal.entry:,.1f}\n"
-                f"stop ₹{signal.stop_loss:,.1f} | target "
-                f"₹{signal.target:,.1f}\n{signal.strategy}: {signal.reason}")
+        # Candidate found -> the agentic layer deliberates.
+        self.stats["candidates"] += 1
+        vol_ratio = (float(df15["volume"].iloc[-1])
+                     / max(float(df15["volume"].iloc[-21:-1].mean()),
+                           1e-9))
+        ctx = DecisionContext(
+            symbol=symbol, signal=signal, regime=regime,
+            mtf=mtf_regime(self.feed, symbol),
+            volume_ratio=round(vol_ratio, 2),
+            open_positions=open_positions,
+            capital=self.capital, equity=self.equity,
+            days_to_expiry=self.expiry_days.get(base),
+            consecutive_losses=self.daily.consecutive_losses,
+            trades_today=self.daily.trades_today,
+            weekday=now.weekday(),
+            upcoming_events=self.calendar.upcoming_for(base, now),
+            events_today=[e.name for e in cal_today
+                          if base in e.symbols],
+            calendar_source=self.calendar.source or "",
+        )
+        decision = self.orchestrator.evaluate(ctx)
+        if not decision.approved:
+            return False
+
+        self.stats["approved"] += 1
+        self.monitor.open_position(symbol, signal, decision.lots,
+                                   mode="live" if settings.LIVE_TRADING
+                                   else "paper")
+        self.daily.record_entry()
+        telegram.send_message(
+            f"📈 <b>ENTRY</b> {signal.action} {symbol} "
+            f"x{decision.lots} @ ~₹{signal.entry:,.1f}\n"
+            f"stop ₹{signal.stop_loss:,.1f} | target "
+            f"₹{signal.target:,.1f}\n{signal.strategy}: {signal.reason}")
+        return True
 
     # ---------------------------------------------------------- sessions
 

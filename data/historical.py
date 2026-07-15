@@ -28,6 +28,30 @@ MAX_DAYS_PER_REQUEST = {
     "ONE_DAY": 2000,
 }
 _REQUEST_GAP_SECS = 0.4  # stay far under Angel's ~3 req/s historical limit
+_RATE_LIMIT_RETRIES = 3
+_RATE_LIMIT_WAIT_SECS = 5.0
+
+
+def _is_rate_limit(exc: Exception) -> bool:
+    """Angel's throttle response ('Access denied because of exceeding
+    access rate') surfaces as a smartapi DataException whose text carries
+    the phrase. Observed live 2026-07-15 during afternoon scans."""
+    return "exceeding access rate" in str(exc).lower()
+
+
+def _get_candles_with_backoff(api, params: dict) -> dict:
+    for attempt in range(1, _RATE_LIMIT_RETRIES + 1):
+        try:
+            return api.getCandleData(params)
+        except Exception as exc:
+            if not _is_rate_limit(exc) or attempt == _RATE_LIMIT_RETRIES:
+                raise
+            wait = _RATE_LIMIT_WAIT_SECS * attempt
+            logger.warning("Angel rate limit hit — backing off %.0fs "
+                           "(attempt %d/%d)", wait, attempt,
+                           _RATE_LIMIT_RETRIES)
+            time.sleep(wait)
+    raise RuntimeError("unreachable")
 
 
 def _chunks(start: datetime, end: datetime,
@@ -69,7 +93,7 @@ def fetch_ohlcv(api, symbol_token: str, interval: str = "FIFTEEN_MINUTE",
             "fromdate": lo.strftime("%Y-%m-%d %H:%M"),
             "todate": hi.strftime("%Y-%m-%d %H:%M"),
         }
-        data = api.getCandleData(params)
+        data = _get_candles_with_backoff(api, params)
         rows = (data or {}).get("data") or []
         if rows:
             frames.append(_to_frame(rows))
