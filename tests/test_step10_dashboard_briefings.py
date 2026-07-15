@@ -76,6 +76,21 @@ def test_dashboard_auth_when_password_set(client, monkeypatch):
     assert client.get("/", headers=good).status_code == 200
 
 
+def test_dashboard_magic_link_sets_cookie(client, monkeypatch):
+    """Phone bookmark flow: ?key= sets a long-lived cookie, then plain
+    requests pass; wrong key stays locked out."""
+    from config import settings as s
+    monkeypatch.setattr(s, "DASHBOARD_PASSWORD", "sekret")
+
+    assert client.get("/?key=wrong").status_code == 401
+    resp = client.get("/?key=sekret")
+    assert resp.status_code == 302                    # redirect drops key
+    assert "mcxdash" in resp.headers.get("Set-Cookie", "")
+    assert client.get("/").status_code == 200         # cookie carried
+    client.delete_cookie("mcxdash")
+    assert client.get("/").status_code == 401         # gone without it
+
+
 def test_public_host_refused_without_password(monkeypatch):
     """settings falls back to loopback if a public bind has no password."""
     import importlib

@@ -7,22 +7,49 @@ cannot trade. Started as a daemon thread by scripts/run_bot.py, or
 standalone:  venv\\Scripts\\python.exe -m dashboard.app
 """
 
+import hashlib
 import hmac
 import sqlite3
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import (Flask, Response, jsonify, redirect, render_template,
+                   request)
 
 from config import settings
 
 app = Flask(__name__)
 
+_COOKIE = "mcxdash"
+_COOKIE_AGE = 90 * 24 * 3600
+
+
+def _cookie_token() -> str:
+    """Cookie value derived from the password (never the password itself);
+    changing DASHBOARD_PASSWORD invalidates every issued cookie."""
+    return hashlib.sha256(
+        ("mcx-dash:" + settings.DASHBOARD_PASSWORD).encode()).hexdigest()
+
 
 @app.before_request
 def _require_auth():
-    """HTTP Basic Auth when DASHBOARD_PASSWORD is set. Without a password
-    the dashboard must never leave localhost — run_bot enforces that by
-    refusing to bind a public host (see _dashboard_host())."""
+    """Three ways in, checked in order — all gated on DASHBOARD_PASSWORD
+    (without a password the dashboard never leaves localhost):
+
+    1. magic link  ?key=<password>  — sets a 90-day cookie and redirects
+       to drop the key from the address bar (phone bookmark flow: mobile
+       in-app browsers often can't show a Basic-Auth prompt at all);
+    2. that cookie;
+    3. HTTP Basic Auth (any username) for curl/scripts.
+    """
     if not settings.DASHBOARD_PASSWORD:
+        return None
+    key = request.args.get("key")
+    if key and hmac.compare_digest(key, settings.DASHBOARD_PASSWORD):
+        resp = redirect(request.path or "/")
+        resp.set_cookie(_COOKIE, _cookie_token(), max_age=_COOKIE_AGE,
+                        httponly=True, samesite="Lax")
+        return resp
+    if hmac.compare_digest(request.cookies.get(_COOKIE, ""),
+                           _cookie_token()):
         return None
     auth = request.authorization
     if auth and hmac.compare_digest(auth.password or "",
