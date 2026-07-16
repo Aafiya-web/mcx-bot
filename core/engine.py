@@ -246,41 +246,56 @@ class Engine:
         held = {p["symbol"] for p in open_positions}
         cal_today = self.calendar.events_today(now)
 
+        snapshot = []
         for base in self.symbols:
             symbol = active_symbol(base)
             if symbol in held:
+                snapshot.append({"symbol": symbol,
+                                 "status": "position open — managing"})
                 continue  # one position per instrument
 
             try:
-                entered = self._scan_symbol(base, symbol, now, cal_today,
-                                            open_positions)
+                entered, note = self._scan_symbol(base, symbol, now,
+                                                  cal_today, open_positions)
             except Exception as exc:
                 # One symbol's transient data failure (Angel rate limit,
                 # network blip) must not abort the scan for the other four
                 # or fail the whole tick (2026-07-15 afternoon throttling).
                 logger.warning("scan %s failed, skipping this bar: %s",
                                symbol, exc)
+                snapshot.append({"symbol": symbol,
+                                 "status": f"scan error: {exc}"})
                 continue
+            snapshot.append({"symbol": symbol, "status": note})
             if entered:
                 open_positions = models.get_open_positions(self.db)
                 held = {p["symbol"] for p in open_positions}
 
+        # The dashboard's "what is the scanner seeing" panel — overwritten
+        # every scan, so an empty decision log is explainable at a glance.
+        models.set_state("scan_snapshot", json.dumps(
+            {"ts": now.isoformat(timespec="minutes"), "rows": snapshot}),
+            self.db)
+
     def _scan_symbol(self, base: str, symbol: str, now: datetime,
-                     cal_today: list, open_positions: list) -> bool:
-        """Evaluate one instrument; True when a position was opened."""
+                     cal_today: list,
+                     open_positions: list) -> tuple[bool, str]:
+        """Evaluate one instrument. Returns (position_opened, verdict) —
+        the verdict feeds the dashboard's scanner panel."""
         df15 = self.feed.get_candles(symbol, "FIFTEEN_MINUTE", 200)
         df1h = self.feed.get_candles(symbol, "ONE_HOUR", 210)
         if len(df15) < 50:
-            return False
+            return False, f"insufficient data ({len(df15)} bars)"
         regime = classify_regime(df15)
 
-        ok, _ = volatility_ok(base, regime.atr_pct)
+        ok, vol_note = volatility_ok(base, regime.atr_pct)
         if not ok:
-            return False
+            return False, f"{regime.regime} (ADX {regime.adx:.0f}) — {vol_note}"
 
         signal = self.strategies[base].generate(df15, df1h, regime, now)
         if signal.action not in ("BUY", "SELL"):
-            return False
+            return False, (f"{regime.regime} (ADX {regime.adx:.0f}) — "
+                           f"{signal.strategy}: {signal.reason}")
 
         # Candidate found -> the agentic layer deliberates.
         self.stats["candidates"] += 1
@@ -304,7 +319,8 @@ class Engine:
         )
         decision = self.orchestrator.evaluate(ctx)
         if not decision.approved:
-            return False
+            return False, (f"CANDIDATE {signal.action} — agents vetoed: "
+                           f"{decision.rationale[:90]}")
 
         self.stats["approved"] += 1
         self.monitor.open_position(symbol, signal, decision.lots,
@@ -316,7 +332,7 @@ class Engine:
             f"x{decision.lots} @ ~₹{signal.entry:,.1f}\n"
             f"stop ₹{signal.stop_loss:,.1f} | target "
             f"₹{signal.target:,.1f}\n{signal.strategy}: {signal.reason}")
-        return True
+        return True, f"ENTERED {signal.action} x{decision.lots}"
 
     # ---------------------------------------------------------- sessions
 

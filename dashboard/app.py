@@ -126,6 +126,19 @@ def api_param_changes():
     return jsonify(_rows("SELECT * FROM param_changes ORDER BY id DESC"))
 
 
+@app.route("/api/scan")
+def api_scan():
+    """Latest scanner verdict per symbol — why the bot is (not) trading
+    right now. Written by the engine after every 15-min scan."""
+    import json as _json
+    raw = (_one("SELECT value FROM bot_state WHERE key='scan_snapshot'")
+           or {}).get("value")
+    try:
+        return jsonify(_json.loads(raw) if raw else {"ts": None, "rows": []})
+    except ValueError:
+        return jsonify({"ts": None, "rows": []})
+
+
 @app.route("/api/candles")
 def api_candles():
     """15-min closes per active symbol for the price charts.

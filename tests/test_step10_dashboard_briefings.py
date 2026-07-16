@@ -76,6 +76,19 @@ def test_dashboard_auth_when_password_set(client, monkeypatch):
     assert client.get("/", headers=good).status_code == 200
 
 
+def test_api_scan_snapshot(client, seeded_db):
+    import json
+
+    from database import models
+    models.set_state("scan_snapshot", json.dumps(
+        {"ts": "2026-07-16T11:00", "rows": [
+            {"symbol": "GOLD", "status": "TRENDING (ADX 27) — no cross"}]}),
+        seeded_db)
+    data = client.get("/api/scan").get_json()
+    assert data["ts"] == "2026-07-16T11:00"
+    assert data["rows"][0]["symbol"] == "GOLD"
+
+
 def test_evening_report_machinery_line(seeded_db):
     import json
     from datetime import date

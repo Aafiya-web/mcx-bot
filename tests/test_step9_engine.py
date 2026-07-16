@@ -47,6 +47,14 @@ def test_engine_tick_runs_clean(engine):
     assert engine.stats["ticks"] == 1
 
 
+def test_scan_snapshot_written(engine):
+    import json
+    engine.tick(datetime(2026, 7, 6, 11, 0))
+    snap = json.loads(models.get_state("scan_snapshot", "{}", engine.db))
+    assert {r["symbol"] for r in snap["rows"]} == {"CRUDEOIL", "GOLD"}
+    assert all(r["status"] for r in snap["rows"])   # every verdict worded
+
+
 def test_scan_survives_one_symbol_failing(engine, monkeypatch):
     """A transient data failure on one instrument (Angel rate limit,
     2026-07-15) must not abort the scan for the others."""

@@ -112,12 +112,19 @@
 <div class="tiles" id="tiles"></div>
 <div class="charts" id="charts"></div>
 
+<section class="block"><h2>Scanner — why it is (not) trading right now
+  <span id="scan-ts" style="text-transform:none;letter-spacing:0"></span></h2>
+  <table id="scan"></table></section>
 <section class="block"><h2>Open positions</h2>
   <table id="open"></table></section>
 <section class="block"><h2>Recent trades</h2>
   <table id="trades"></table></section>
 <section class="block" id="decisions-wrap">
   <details><summary>Agent decision log (latest 25)</summary>
+  <p class="dim" id="dec-empty" style="display:none;font-size:.8rem">
+    Empty is normal: the agents convene only when the scanner (panel
+    above) finds a candidate setup. Every debate lands here when one
+    occurs.</p>
   <table id="decisions"></table></details></section>
 
 <script>
@@ -300,9 +307,20 @@ async function j(url) { return (await fetch(url)).json(); }
 async function refresh() {
   document.body.classList.add("loading");   /* keep frame, dim it */
   try {
-    const [s, perf, trades, candles, dec] = await Promise.all([
+    const [s, perf, trades, candles, dec, scan] = await Promise.all([
       j("/api/status"), j("/api/performance"), j("/api/trades"),
-      j("/api/candles?days=" + days), j("/api/decisions")]);
+      j("/api/candles?days=" + days), j("/api/decisions"),
+      j("/api/scan")]);
+
+    document.getElementById("scan-ts").textContent =
+      scan.ts ? "· as of " + scan.ts.slice(11, 16) : "";
+    fillTable(document.getElementById("scan"),
+      [{label: "symbol"}, {label: "verdict"}],
+      (scan.rows || []).map(r => [
+        {text: r.symbol},
+        {text: r.status,
+         cls: r.status.startsWith("ENTERED") ? "pos"
+              : r.status.startsWith("CANDIDATE") ? "" : "dim"}]));
 
     const flags = document.getElementById("flags");
     flags.replaceChildren();
@@ -355,6 +373,8 @@ async function refresh() {
         {text: t.pnl === null ? "—" : inr(t.pnl), num: true,
          cls: t.pnl === null ? "dim" : cls(t.pnl)}]));
 
+    document.getElementById("dec-empty").style.display =
+      dec.length ? "none" : "block";
     fillTable(document.getElementById("decisions"),
       [{label: "time"}, {label: "symbol"}, {label: "stage"},
        {label: "verdict"}, {label: "rationale"}],
