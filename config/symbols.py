@@ -124,12 +124,22 @@ EXPIRY_RULES: dict[str, dict] = {
 
 # ATR as % of price must sit inside these bands or the regime detector
 # vetoes trading (mcx-regime-detector).
+#
+# FLOORS RECALIBRATED 2026-07-16 from live 15-min data (~6.4 sessions,
+# 373 bars/symbol). The skill's original floors were daily-bar values:
+# on 15-min bars they rejected ~72% of GOLD, ~65% of NATURALGAS, ~50%
+# of SILVER — and 100% of COPPER (floor 0.2 vs observed P90 0.198),
+# making it untradeable by construction. New floors sit just below each
+# instrument's observed P10, restoring the floor's actual job: skip DEAD
+# tape, not normal tape. CEILINGS unchanged (the too-wild-to-size guard).
+# Observed P10/P50: CRUDE .43/.55, NG .35/.45, GOLD .13/.18,
+# SILVER .24/.30, COPPER .15/.17.
 ATR_LIMITS: dict[str, dict] = {
-    "CRUDEOIL": {"min": 0.3, "max": 3.0},
-    "GOLD": {"min": 0.2, "max": 1.5},
-    "SILVER": {"min": 0.3, "max": 2.5},
-    "NATURALGAS": {"min": 0.5, "max": 5.0},
-    "COPPER": {"min": 0.2, "max": 2.0},
+    "CRUDEOIL": {"min": 0.3, "max": 3.0},    # floor already sane; kept
+    "GOLD": {"min": 0.10, "max": 1.5},
+    "SILVER": {"min": 0.20, "max": 2.5},
+    "NATURALGAS": {"min": 0.30, "max": 5.0},
+    "COPPER": {"min": 0.12, "max": 2.0},
 }
 
 USE_MINI_CONTRACTS = (
