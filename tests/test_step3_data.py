@@ -123,3 +123,40 @@ def test_single_chunk_when_range_fits():
     start = datetime(2026, 6, 1)
     end = datetime(2026, 6, 10)
     assert _chunks(start, end, "FIFTEEN_MINUTE") == [(start, end)]
+
+
+def test_drop_forming_bar():
+    """Angel returns the still-forming candle (live finding 2026-07-17);
+    strategies must only ever see completed bars."""
+    from datetime import datetime
+
+    import pandas as pd
+
+    from data.feed import drop_forming_bar
+
+    idx = pd.date_range("2026-07-17 11:45", periods=3, freq="15min",
+                        tz="Asia/Kolkata")          # opens 11:45,12:00,12:15
+    df = pd.DataFrame({"open": 1.0, "high": 2.0, "low": 0.5,
+                       "close": 1.5, "volume": 10.0}, index=idx)
+
+    # 12:22 — the 12:15 bar is still forming: drop it
+    out = drop_forming_bar(df, datetime(2026, 7, 17, 12, 22),
+                           "FIFTEEN_MINUTE")
+    assert len(out) == 2 and str(out.index[-1])[11:16] == "12:00"
+
+    # 12:30 — the 12:15 bar just completed: keep it
+    out = drop_forming_bar(df, datetime(2026, 7, 17, 12, 30),
+                           "FIFTEEN_MINUTE")
+    assert len(out) == 3
+
+    # hourly interval honours its own width
+    hidx = pd.date_range("2026-07-17 10:00", periods=2, freq="1h",
+                         tz="Asia/Kolkata")
+    hdf = pd.DataFrame({"open": 1.0, "high": 2.0, "low": 0.5,
+                        "close": 1.5, "volume": 10.0}, index=hidx)
+    out = drop_forming_bar(hdf, datetime(2026, 7, 17, 11, 30), "ONE_HOUR")
+    assert len(out) == 1
+
+    # empty frame passes through
+    assert drop_forming_bar(df.iloc[:0], datetime(2026, 7, 17, 12, 0),
+                            "FIFTEEN_MINUTE").empty

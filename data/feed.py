@@ -147,6 +147,29 @@ class MockFeed(Feed):
 # --------------------------------------------------------------- live feed
 
 
+_INTERVAL_MINUTES = {"FIVE_MINUTE": 5, "FIFTEEN_MINUTE": 15,
+                     "THIRTY_MINUTE": 30, "ONE_HOUR": 60, "ONE_DAY": 1440}
+
+
+def drop_forming_bar(df: pd.DataFrame, now, interval: str) -> pd.DataFrame:
+    """Remove the still-forming last candle from a broker response.
+
+    Angel's getCandleData includes the CURRENT partial bar (verified live
+    2026-07-17). The engine scans at bucket start, so without this every
+    strategy evaluated a seconds-old, near-empty bar as "the last bar" —
+    no breakout, no volume, no flip could ever be seen, and the bot went
+    a week structurally unable to signal. A bar timestamped T (its open)
+    is complete only when now >= T + interval.
+    """
+    if df.empty:
+        return df
+    last_open = df.index[-1].to_pydatetime().replace(tzinfo=None)
+    minutes = _INTERVAL_MINUTES.get(interval, 15)
+    if now < last_open + timedelta(minutes=minutes):
+        return df.iloc[:-1]
+    return df
+
+
 class LiveFeed(Feed):
     """Polling feed over Angel One. token_map (symbol -> symboltoken) comes
     from the contract monitor, which resolves the active contract daily."""
@@ -195,7 +218,7 @@ class LiveFeed(Feed):
             return fetch_ohlcv(get_api(), self._tokens[symbol], interval,
                                days)
 
-        df = _do()
+        df = drop_forming_bar(_do(), datetime.now(), interval)
         if not df.empty:
             save_candles(symbol, interval, df)
         return df.tail(lookback)
