@@ -1,4 +1,4 @@
-"""The 5-instrument MCX lineup and all per-symbol static data.
+﻿"""The 5-instrument MCX lineup and all per-symbol static data.
 
 Single source of truth for what the bot trades and how each instrument is
 classified. Values follow the skill files (mcx-signal-analyzer,
@@ -25,7 +25,7 @@ INSTRUMENTS: dict[str, dict] = {
         "cluster": "ENERGY",
         "strategy": "momentum_breakout",
         "timeframe": "FIFTEEN_MINUTE",
-        "mini": "NATURALGASM",
+        "mini": "NATGASMINI",
     },
     "GOLD": {
         "cluster": "PRECIOUS_METALS",
@@ -56,7 +56,8 @@ LOT_SIZES: dict[str, int] = {
     "SILVER": 30,         # kg
     "SILVERM": 5,         # kg
     "NATURALGAS": 1250,   # mmBtu
-    "NATURALGASM": 250,   # mmBtu
+    "NATGASMINI": 250,    # mmBtu (VERIFIED live 2026-07-17: the natural
+                          # gas mini scrip is NATGASMINI, not NATURALGASM)
     "COPPER": 2500,       # kg
     "ZINC": 5000,         # kg
     "ALUMINIUM": 5000,    # kg
@@ -73,7 +74,7 @@ POINT_VALUES: dict[str, int] = {
     "SILVER": 30,         # quoted per kg
     "SILVERM": 5,
     "NATURALGAS": 1250,   # quoted per mmBtu
-    "NATURALGASM": 250,
+    "NATGASMINI": 250,
     "COPPER": 2500,       # quoted per kg
     "ZINC": 5000,
     "ALUMINIUM": 5000,
@@ -85,7 +86,7 @@ POINT_VALUES: dict[str, int] = {
 # calculator at step 2 research / before live; MCX revises these often.
 MARGIN_PCT_ESTIMATE: dict[str, float] = {
     "CRUDEOIL": 10.0, "CRUDEOILM": 10.0,
-    "NATURALGAS": 12.0, "NATURALGASM": 12.0,
+    "NATURALGAS": 12.0, "NATGASMINI": 12.0,
     "GOLD": 8.0, "GOLDM": 8.0,
     "SILVER": 10.0, "SILVERM": 10.0,
     "COPPER": 9.0,

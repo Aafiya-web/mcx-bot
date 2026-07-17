@@ -132,6 +132,29 @@ def test_parse_expiry():
     assert ro.parse_expiry("NOT_A_FUTURE") is None
 
 
+def test_scrip_not_found_raises_lookup_not_type_error():
+    """Angel's 'Scrip not found' response carries data=None; the picker
+    must fail with a clear LookupError, not 'NoneType is not iterable'
+    (live incident 2026-07-17 with the wrong natgas mini name)."""
+    class _Api:
+        def searchScrip(self, exch, sym):
+            return {"status": False, "data": None,
+                    "message": "Scrip not found"}
+
+    with pytest.raises(LookupError, match="No valid contracts"):
+        ro.get_active_contract(_Api(), "NATURALGASM")
+
+
+def test_all_configured_minis_have_static_data():
+    from config import symbols as sy
+    for base, info in sy.INSTRUMENTS.items():
+        mini = info["mini"]
+        if mini:
+            assert mini in sy.LOT_SIZES, f"{mini} missing lot size"
+            assert mini in sy.POINT_VALUES, f"{mini} missing point value"
+            assert mini in sy.MARGIN_PCT_ESTIMATE, f"{mini} missing margin"
+
+
 def test_contract_base_filter_excludes_minis_and_options():
     assert ro._is_contract_of("CRUDEOIL", "CRUDEOIL19AUG26FUT")
     assert ro._is_contract_of("CRUDEOILM", "CRUDEOILM19AUG26FUT")

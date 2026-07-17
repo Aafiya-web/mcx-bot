@@ -86,8 +86,11 @@ def get_active_contract(api, base_symbol: str,
     """Nearest non-expired contract via searchScrip (live only)."""
     today = today or date.today()
     result = _search_scrip(api, base_symbol)
+    # "Scrip not found" responses carry data=None — .get("data", []) does
+    # NOT protect against that (key present, value None; bit us live when
+    # a wrong mini name was searched).
     valid = []
-    for inst in result.get("data", []):
+    for inst in (result.get("data") or []):
         sym = inst["tradingsymbol"]
         if not _is_contract_of(base_symbol, sym):
             continue
@@ -112,7 +115,7 @@ def get_next_contract(api, base_symbol: str,
     today = today or date.today()
     result = _search_scrip(api, base_symbol)
     valid = []
-    for inst in result.get("data", []):
+    for inst in (result.get("data") or []):
         sym = inst["tradingsymbol"]
         if not _is_contract_of(base_symbol, sym):
             continue
