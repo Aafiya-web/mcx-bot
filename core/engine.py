@@ -254,6 +254,17 @@ class Engine:
                                  "status": "position open — managing"})
                 continue  # one position per instrument
 
+            # Owner-level per-symbol pause (e.g. expiring contract with a
+            # thinning book). Set/cleared via scripts/pause_symbol.py or
+            # auto-lifted by contract maintenance on rollover; the pause
+            # itself is one decision_log row — not one per scan.
+            pause_reason = models.get_state(f"symbol_pause:{base}", "",
+                                            self.db)
+            if pause_reason:
+                snapshot.append({"symbol": symbol,
+                                 "status": f"paused: {pause_reason}"})
+                continue
+
             try:
                 entered, note = self._scan_symbol(base, symbol, now,
                                                   cal_today, open_positions)

@@ -55,6 +55,59 @@ def test_scan_snapshot_written(engine):
     assert all(r["status"] for r in snap["rows"])   # every verdict worded
 
 
+def test_symbol_pause_skips_scanning(engine, monkeypatch):
+    import json
+    models.set_state("symbol_pause:CRUDEOIL", "expiring JUL contract",
+                     engine.db)
+    seen = []
+    real = engine.feed.get_candles
+    monkeypatch.setattr(
+        engine.feed, "get_candles",
+        lambda s, i="FIFTEEN_MINUTE", lb=200: (seen.append(s)
+                                               or real(s, i, lb)))
+    engine.tick(datetime(2026, 7, 6, 11, 0))
+    assert "CRUDEOIL" not in seen          # never fetched, never scanned
+    assert "GOLD" in seen                  # others unaffected
+    snap = json.loads(models.get_state("scan_snapshot", "{}", engine.db))
+    stat = {r["symbol"]: r["status"] for r in snap["rows"]}
+    assert stat["CRUDEOIL"].startswith("paused: expiring JUL")
+
+
+def test_pause_auto_lifts_on_contract_roll(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    sent = []
+    monkeypatch.setattr("notifications.telegram.send_message",
+                        lambda t, *a, **k: sent.append(t) or True)
+    db = tmp_path / "roll.db"
+    models.init_db(db)
+    from scripts.pause_symbol import pause
+    from scripts.run_bot import ContractBook, _contract_maintenance
+
+    book = ContractBook(api=None)
+    book.contracts = {"CRUDEOIL": {"symbol": "CRUDEOIL20JUL26FUT",
+                                   "token": "1", "days_to_expiry": 0}}
+
+    def fake_refresh():
+        book.contracts = {"CRUDEOIL": {"symbol": "CRUDEOIL19AUG26FUT",
+                                       "token": "2", "days_to_expiry": 30}}
+
+    monkeypatch.setattr(book, "refresh", fake_refresh)
+    pause("CRUDEOIL", "await AUG roll", db_path=db)
+    assert models.get_state("symbol_pause:CRUDEOIL", "", db)
+
+    engine = SimpleNamespace(db=db, monitor=None, expiry_days={})
+    feed = SimpleNamespace(update_token=lambda s, t: None)
+    _contract_maintenance(engine, feed, book)
+
+    assert models.get_state("symbol_pause:CRUDEOIL", "", db) == ""
+    with models._conn(db) as c:
+        rows = c.execute("SELECT decision FROM decision_log "
+                         "WHERE symbol='CRUDEOIL' ORDER BY id").fetchall()
+    assert [r[0] for r in rows] == ["PAUSE", "RESUME"]
+    assert any("RESUMED" in t for t in sent)
+
+
 def test_scan_survives_one_symbol_failing(engine, monkeypatch):
     """A transient data failure on one instrument (Angel rate limit,
     2026-07-15) must not abort the scan for the others."""

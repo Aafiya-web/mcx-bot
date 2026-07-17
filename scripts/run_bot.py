@@ -103,10 +103,21 @@ def _contract_maintenance(engine, feed, book: ContractBook) -> None:
                 book.set_contract(s, nc),
                 feed.update_token(s, nc["token"])))
 
+    before = {sym: c["symbol"] for sym, c in book.contracts.items()}
     book.refresh()                     # picks up post-roll active months
     for sym, c in book.contracts.items():
         feed.update_token(sym, c["token"])
     engine.expiry_days = book.expiry_days()
+
+    # A contract month change lifts any owner pause on that instrument
+    # (e.g. "no crude entries until the AUG roll").
+    from scripts.pause_symbol import resume
+    for sym, c in book.contracts.items():
+        base = base_of(sym)
+        if (before.get(sym) and before[sym] != c["symbol"]
+                and models.get_state(f"symbol_pause:{base}", "", engine.db)):
+            resume(base, f"contract rolled {before[sym]} -> {c['symbol']}",
+                   db_path=engine.db)
 
 
 def _broker_init_with_patience() -> ContractBook:
