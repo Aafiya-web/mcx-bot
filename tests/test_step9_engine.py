@@ -55,6 +55,58 @@ def test_scan_snapshot_written(engine):
     assert all(r["status"] for r in snap["rows"])   # every verdict worded
 
 
+def test_watch_mode_exit_detail_decrements_and_disables(tmp_path,
+                                                        monkeypatch):
+    sent = []
+    monkeypatch.setattr("notifications.telegram.send_message",
+                        lambda t, *a, **k: sent.append(t) or True)
+    db = tmp_path / "watch.db"
+    feed = MockFeed(symbols=["CRUDEOIL", "GOLD"], n_bars=400, seed=42)
+    eng = Engine(feed, PaperExecutor(feed.get_ltp), db_path=db,
+                 capital=1_000_000.0, symbols=["CRUDEOIL", "GOLD"])
+    models.set_state("watch_mode_remaining", "1", db)
+
+    from strategies.base import Signal
+    sig = Signal("BUY", "test", 6000.0, 5900.0, 6300.0, 2.0, 60.0, "t")
+    feed.set_ltp("CRUDEOIL", 6000.0)
+    tid = eng.monitor.open_position("CRUDEOIL", sig, 1)
+    ev = eng.monitor.close_position(tid, "SQUAREOFF")
+    eng._on_close(ev)
+
+    assert any("WATCH — exit detail" in t for t in sent)
+    assert any("watch mode complete" in t for t in sent)
+    assert models.get_state("watch_mode_remaining", "", db) == "0"
+
+    sent.clear()                       # disarmed: next close is terse
+    tid = eng.monitor.open_position("CRUDEOIL", sig, 1)
+    eng._on_close(eng.monitor.close_position(tid, "SQUAREOFF"))
+    assert not any("WATCH" in t for t in sent)
+
+
+def test_watch_mode_entry_detail_includes_gate_chain(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    sent = []
+    monkeypatch.setattr("notifications.telegram.send_message",
+                        lambda t, *a, **k: sent.append(t) or True)
+    db = tmp_path / "watch2.db"
+    feed = MockFeed(symbols=["CRUDEOIL"], n_bars=200, seed=1)
+    eng = Engine(feed, PaperExecutor(feed.get_ltp), db_path=db,
+                 capital=1_000_000.0, symbols=["CRUDEOIL"])
+
+    from strategies.base import Signal
+    sig = Signal("BUY", "test", 6000.0, 5900.0, 6200.0, 2.0, 60.0, "t")
+    decision = SimpleNamespace(stages={"risk_team": SimpleNamespace(
+        fields={"gate": [("regime", True, "TRENDING ok"),
+                         ("correlation", True, "no cluster clash")]})})
+    eng._watch_entry_detail("CRUDEOIL", sig, decision)
+
+    assert any("WATCH — entry detail" in t for t in sent)
+    body = next(t for t in sent if "entry detail" in t)
+    assert "✅ regime" in body and "✅ correlation" in body
+    assert "R unit" in body
+
+
 def test_symbol_pause_skips_scanning(engine, monkeypatch):
     import json
     models.set_state("symbol_pause:CRUDEOIL", "expiring JUL contract",

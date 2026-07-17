@@ -165,6 +165,50 @@ class Engine:
             "candidates": self.stats["candidates"],
             "approved": self.stats["approved"]}), self.db)
 
+    # ------------------------------------------------- first-trades watch
+    # Temporary scaffolding: heightened Telegram verbosity for the first N
+    # closed trades after (re)arming, because they exercise never-run-live
+    # paths (fills, stop pickup, backstops, audits). Auto-disables at 0;
+    # re-arm after any major pipeline change: scripts/watch_mode.py 5
+
+    def _watch_remaining(self) -> int:
+        raw = models.get_state("watch_mode_remaining", "", self.db)
+        return int(raw) if raw else settings.WATCH_FIRST_TRADES
+
+    def _watch_entry_detail(self, symbol, signal, decision) -> None:
+        if self._watch_remaining() <= 0:
+            return
+        risk_out = decision.stages.get("risk_team")
+        gate = (risk_out.fields.get("gate") if risk_out else None) or []
+        lines = [f"{'✅' if ok else '❌'} {name}: {detail[:60]}"
+                 for name, ok, detail in gate]
+        r_unit = abs(signal.target - signal.entry) / 2.0
+        telegram.send_message(
+            f"🔍 <b>WATCH — entry detail</b> {symbol}\n"
+            f"levels: entry {signal.entry:,.1f} / stop "
+            f"{signal.stop_loss:,.1f} / target {signal.target:,.1f} "
+            f"(R unit {r_unit:,.1f})\n"
+            f"gate chain:\n" + "\n".join(lines))
+
+    def _watch_exit_detail(self, ev) -> None:
+        remaining = self._watch_remaining()
+        if remaining <= 0:
+            return
+        slip = ev.fill_price - ev.intended_price
+        slip_pct = (abs(slip) / ev.intended_price * 100
+                    if ev.intended_price else 0.0)
+        telegram.send_message(
+            f"🔍 <b>WATCH — exit detail</b> {ev.symbol} #{ev.trade_id}\n"
+            f"path: {ev.exit_reason}\n"
+            f"intended {ev.intended_price:,.2f} → filled "
+            f"{ev.fill_price:,.2f} (slip {slip:+,.2f} / {slip_pct:.3f}%)\n"
+            f"P&L {ev.pnl:+,.0f}")
+        remaining -= 1
+        models.set_state("watch_mode_remaining", str(remaining), self.db)
+        if remaining == 0:
+            telegram.send_message("🔍 watch mode complete — normal "
+                                  "verbosity resumes")
+
     def _end_of_session(self, now: datetime) -> None:
         """Square off every position that has not EARNED an overnight hold.
         The default is always to close — holding is the exception, and any
@@ -243,6 +287,7 @@ class Engine:
             f"P&L ₹{ev.pnl:,.0f}"
             + (f" | slip {ev.slippage_pct:.2f}%"
                if ev.exit_reason == "STOP_LOSS" else ""))
+        self._watch_exit_detail(ev)
 
     # ------------------------------------------------------------ entries
 
@@ -348,6 +393,7 @@ class Engine:
             f"x{decision.lots} @ ~₹{signal.entry:,.1f}\n"
             f"stop ₹{signal.stop_loss:,.1f} | target "
             f"₹{signal.target:,.1f}\n{signal.strategy}: {signal.reason}")
+        self._watch_entry_detail(symbol, signal, decision)
         return True, f"ENTERED {signal.action} x{decision.lots}"
 
     # ---------------------------------------------------------- sessions

@@ -481,6 +481,13 @@ Divergence (replay > 0 on a day live logged 0, or replay/live >
    symbols, or event blackouts suppress real scans the replay still
    counts. Investigate patterns, not single hits.
 
+**First-trades watch mode (temporary scaffolding):** the first N closed
+trades after (re)arming get extra Telegram detail — entry gate-chain
+summary, exit intended-vs-fill slippage and path — because first trades
+through new code exercise never-run paths. Auto-disables at 0. Re-arm
+after ANY major pipeline change: `venv/bin/python scripts/watch_mode.py 5`.
+Default N = `WATCH_FIRST_TRADES` (5).
+
 ## 12. Known gaps / deferred work
 
 **Update 2026-07-07:** the former MUST-FIX-before-Stage-B block
