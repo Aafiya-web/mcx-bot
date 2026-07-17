@@ -95,6 +95,14 @@ OVERNIGHT_MIN_R = float(os.getenv("OVERNIGHT_MIN_R", "0.5"))
 # replay/live exceeds this ratio.
 REPLAY_ALERT_RATIO = float(os.getenv("REPLAY_ALERT_RATIO", "3.0"))
 
+# Minimum seconds between broker candle fetches (LiveFeed pacing): scan
+# cycles hit 10 fetches back-to-back, which trips Angel's rate limits.
+CANDLE_FETCH_GAP_SECS = float(os.getenv("CANDLE_FETCH_GAP_SECS", "1.5"))
+
+# First-trades watch mode: heightened Telegram verbosity for the first N
+# CLOSED trades after (re)arming — see scripts/watch_mode.py.
+WATCH_FIRST_TRADES = _int("WATCH_FIRST_TRADES", "5")
+
 # SEBI: every live order must carry the registered algo tag.
 ALGO_ID_TAG = os.getenv("ALGO_ID_TAG", "").strip()
 

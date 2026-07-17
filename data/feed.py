@@ -14,6 +14,8 @@ from datetime import datetime, time as dtime, timedelta
 import numpy as np
 import pandas as pd
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
 SESSION_OPEN = dtime(9, 0)
@@ -203,6 +205,21 @@ class LiveFeed(Feed):
         "ONE_DAY": 1.0,
     }
 
+    # Shared across instances: scan cycles fetch 5 symbols x 2 intervals
+    # back-to-back, which tripped Angel's per-second limits (observed
+    # 2026-07-17, SILVER scan errors). Every broker candle fetch is paced
+    # at least CANDLE_FETCH_GAP_SECS apart, wherever it comes from.
+    _last_fetch_mono: float = 0.0
+
+    @classmethod
+    def _pace(cls) -> None:
+        import time as _time
+        gap = settings.CANDLE_FETCH_GAP_SECS
+        wait = cls._last_fetch_mono + gap - _time.monotonic()
+        if wait > 0:
+            _time.sleep(wait)
+        cls._last_fetch_mono = _time.monotonic()
+
     def get_candles(self, symbol: str, interval: str = "FIFTEEN_MINUTE",
                     lookback: int = 200) -> pd.DataFrame:
         from broker.auto_login import get_api, with_auth_retry
@@ -215,6 +232,7 @@ class LiveFeed(Feed):
 
         @with_auth_retry
         def _do():
+            self._pace()
             return fetch_ohlcv(get_api(), self._tokens[symbol], interval,
                                days)
 

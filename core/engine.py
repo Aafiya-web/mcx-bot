@@ -151,7 +151,12 @@ class Engine:
             return
         self._last_scan_bucket = bucket
         self.stats["scans"] += 1
+        import time as _time
+        t0 = _time.monotonic()
         self._scan_for_entries(now)
+        # Paced fetches (CANDLE_FETCH_GAP_SECS) must still finish far
+        # inside the 15-min cycle — this line proves the budget in logs.
+        logger.debug("scan took %.1fs", _time.monotonic() - t0)
         # Persist today's machinery counters for the evening report — the
         # owner's daily proof that scanning is alive even on no-trade days.
         models.set_state("scan_stats", json.dumps({

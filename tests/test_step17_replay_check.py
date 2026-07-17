@@ -123,3 +123,29 @@ def test_ratio_tolerance(db, monkeypatch):
 
     result = rc.compare(DAY, DAY, db_path=db)    # ratio replay/1 > 3.0
     assert result["diverged"] and sent
+
+
+def test_livefeed_fetch_pacing(monkeypatch):
+    """Broker candle fetches are spaced CANDLE_FETCH_GAP_SECS apart no
+    matter how fast the scan loop calls (rate-limit guard, 2026-07-17)."""
+    from config import settings
+    from data.feed import LiveFeed
+
+    monkeypatch.setattr(settings, "CANDLE_FETCH_GAP_SECS", 1.5)
+    clock = {"t": 100.0}
+    naps: list[float] = []
+
+    import time as _time
+    monkeypatch.setattr(_time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(_time, "sleep",
+                        lambda s: (naps.append(s),
+                                   clock.__setitem__("t", clock["t"] + s)))
+
+    LiveFeed._last_fetch_mono = 0.0
+    LiveFeed._pace()                 # first call: no wait
+    assert naps == []
+    LiveFeed._pace()                 # immediate second call: full gap
+    assert naps and abs(naps[0] - 1.5) < 1e-9
+    clock["t"] += 10.0               # plenty of time passes
+    LiveFeed._pace()                 # no extra sleep needed
+    assert len(naps) == 1
