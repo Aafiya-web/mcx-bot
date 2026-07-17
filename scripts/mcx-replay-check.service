@@ -1,0 +1,18 @@
+# Weekly live-vs-replay divergence guard (see scripts/replay_check.py and
+# HANDOFF.md "Live-vs-replay divergence guard"). Install with the timer:
+#   sudo cp scripts/mcx-replay-check.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mcx-replay-check.timer
+
+[Unit]
+Description=MCX bot weekly live-vs-replay divergence check
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/mcx-trading-bot
+Environment=TZ=Asia/Kolkata
+EnvironmentFile=-/home/ubuntu/mcx-trading-bot/.env
+ExecStart=/home/ubuntu/mcx-trading-bot/venv/bin/python scripts/replay_check.py --days 7
+Nice=10

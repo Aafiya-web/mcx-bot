@@ -1,0 +1,11 @@
+# Sunday mid-morning IST: market closed, cache holds the full week.
+
+[Unit]
+Description=Weekly MCX live-vs-replay divergence check
+
+[Timer]
+OnCalendar=Sun *-*-* 10:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

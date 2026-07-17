@@ -90,6 +90,11 @@ POSITIONAL_SYMBOLS = [s.strip().upper() for s in
 # overnight — the profit cushion that absorbs opening-gap risk.
 OVERNIGHT_MIN_R = float(os.getenv("OVERNIGHT_MIN_R", "0.5"))
 
+# Weekly live-vs-replay divergence guard (scripts/replay_check.py): alert
+# when the replay finds candidates on a day live logged none, or when
+# replay/live exceeds this ratio.
+REPLAY_ALERT_RATIO = float(os.getenv("REPLAY_ALERT_RATIO", "3.0"))
+
 # SEBI: every live order must carry the registered algo tag.
 ALGO_ID_TAG = os.getenv("ALGO_ID_TAG", "").strip()
 

@@ -90,6 +90,22 @@ CREATE TABLE IF NOT EXISTS param_changes (
 )
 """
 
+# Weekly live-vs-replay divergence guard history (scripts/replay_check.py):
+# per symbol per day, what the replay saw vs what the live bot logged.
+_REPLAY_CHECKS_DDL = """
+CREATE TABLE IF NOT EXISTS replay_checks (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts               TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    period_start     TEXT NOT NULL,
+    period_end       TEXT NOT NULL,
+    symbol           TEXT NOT NULL,
+    day              TEXT NOT NULL,
+    replay_candidates INTEGER NOT NULL,
+    live_candidates  INTEGER NOT NULL,
+    diverged         INTEGER NOT NULL DEFAULT 0
+)
+"""
+
 # Idempotent column additions: (table, column, type). Each is attempted and
 # an OperationalError (column exists) is ignored.
 _MIGRATIONS: list[tuple[str, str, str]] = [
@@ -109,7 +125,8 @@ def _conn(db_path: Path | str | None = None) -> sqlite3.Connection:
 def init_db(db_path: Path | str | None = None) -> None:
     with _conn(db_path) as c:
         for ddl in (_TRADES_DDL, _DAILY_SUMMARY_DDL, _BOT_STATE_DDL,
-                    _DECISION_LOG_DDL, _PARAM_CHANGES_DDL):
+                    _DECISION_LOG_DDL, _PARAM_CHANGES_DDL,
+                    _REPLAY_CHECKS_DDL):
             c.execute(ddl)
         for table, column, coltype in _MIGRATIONS:
             try:

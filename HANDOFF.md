@@ -449,6 +449,38 @@ static table (added 2026-07-07):
   out of scope for a calendar API — the optional LLM second opinion in the
   macro agent is the hook for that.
 
+## 11b. Live-vs-replay divergence guard (the silent-blindness alarm)
+
+**Why it exists — the forming-bar incident (2026-07-13..17):** the bot ran
+a full week with every ops signal green (service up, candles fresh, auth
+fine, scans on schedule) while producing zero candidates — because Angel's
+API includes the still-forming candle and every scan evaluated it as "the
+last bar". A replay of the same cached sessions found 22 signals where the
+live decision log had 0. Ops monitoring cannot catch this class of bug;
+only comparing what the pipeline SHOULD have seen against what it DID see
+can.
+
+**What runs:** `scripts/mcx-replay-check.timer` (Sunday 10:00 IST, market
+closed) executes `scripts/replay_check.py --days 7`: replays the week's
+CACHED candles (never refetched — the comparison is against exactly the
+data the live bot saw) through the same volatility gate + strategy objects
+the engine uses, counts signal-bars per instrument per day, and compares
+against `decision_log` 'pm' rows. History in the `replay_checks` table.
+Divergence (replay > 0 on a day live logged 0, or replay/live >
+`REPLAY_ALERT_RATIO`) sends a Telegram alert.
+
+**When the alert fires, check in this order:**
+1. Forming bars again: is the newest cached bar's timestamp the CURRENT
+   15-min bucket during market hours? (`SELECT MAX(ts) FROM candles`.)
+2. Feed freshness/auth: journal for AG8001s, rate-limit storms, scan
+   errors (`journalctl -u mcx-bot | grep -i "scan .* failed"`).
+3. Run `venv/bin/python scripts/replay_check.py --days 7` manually and
+   read which instrument/day diverges; then replay that day's verdicts
+   with the scanner-panel probe (HANDOFF §3c engine notes).
+4. Small divergences (1-2) can be legitimate: live restarts, paused
+   symbols, or event blackouts suppress real scans the replay still
+   counts. Investigate patterns, not single hits.
+
 ## 12. Known gaps / deferred work
 
 **Update 2026-07-07:** the former MUST-FIX-before-Stage-B block
