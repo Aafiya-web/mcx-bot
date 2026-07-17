@@ -21,6 +21,12 @@ days, additionally watch: scan cadence (log shows one scan per 15 min, no
 AB1010 errors), the 09:05 contract-maintenance job, and that daily limits
 reset at the new session (`bot_state.daily_tracker`).
 
+**Stage B clock started: 2026-07-17** (owner decision). The 2026-07-13..16
+week does NOT count toward the 4+ weeks: the forming-bar bug (fixed in
+`adbf605`) made the live path structurally unable to see signals, so that
+week evaluated nothing. The 4-week evaluation window runs from the first
+session on completed-bar data.
+
 Setup: Angel One credentials in `.env`, `LIVE_TRADING=false`, Telegram
 configured, bot running via systemd (or `scripts/run_bot.py`).
 
