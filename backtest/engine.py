@@ -20,11 +20,13 @@ from core.regime import classify_regime
 from risk.position_sizing import position_size
 
 COMMISSION_PER_SIDE = 20.0     # ₹, Angel One flat
-# Bars of 15-min context per step. Landmine L3: hourly strategies (EMA
-# 50/200 on 1H) need ~202 hourly bars = ~850 15-min bars in the window or
-# they never exit warmup and the backtest prints "No trades generated".
+# Bars of 15-min context per step (regime + any 15-min sub-strategy).
+# Higher-timeframe convergence is NO LONGER tied to this window: the 1H
+# series is precomputed over full history and sliced per step (see
+# run_backtest), so a 200-EMA converges regardless of LOOKBACK. The
+# hourly value stays a bit larger only to give regime a longer look.
 LOOKBACK = 250                 # intraday (15-min) strategies
-LOOKBACK_HOURLY = 900          # strategies that trade the 1H timeframe
+LOOKBACK_HOURLY = 400          # 1H-timeframe instruments (15-min context)
 WARMUP = 60
 
 
@@ -51,11 +53,21 @@ def _slip(price: float, side: str) -> float:
     return price + s if side == "BUY" else price - s
 
 
+_H1_AGG = {"open": "first", "high": "max", "low": "min",
+           "close": "last", "volume": "sum"}
+# A 1H bar opening at L completes at L+60m; the 15-min bar opening at ts
+# closes at ts+15m, so hourly bars with L <= ts-45m are complete then.
+# Gating the precomputed hourly series by this keeps the backtest free of
+# look-ahead while still feeding a fully-converged EMA (fix 2026-07-24).
+_H1_COMPLETE_LAG = pd.Timedelta(minutes=45)
+
+
 def _bt_may_hold(symbol: str, position: dict, bar_close: float,
-                 window: pd.DataFrame) -> bool:
+                 h1: pd.DataFrame) -> bool:
     """Backtest mirror of Engine._may_hold_overnight (minus the calendar,
     which history doesn't carry): positional instrument, >= OVERNIGHT_MIN_R
-    profit cushion, 1H trend still pointing the position's way."""
+    profit cushion, 1H trend still pointing the position's way. `h1` is the
+    completed-bars-only hourly series as of the current bar."""
     from config.symbols import base_of
     if base_of(symbol) not in settings.POSITIONAL_SYMBOLS:
         return False
@@ -67,9 +79,6 @@ def _bt_may_hold(symbol: str, position: dict, bar_close: float,
         move = -move
     if move / r_unit < settings.OVERNIGHT_MIN_R:
         return False
-    h1 = (window.resample("1h")
-          .agg({"open": "first", "high": "max", "low": "min",
-                "close": "last", "volume": "sum"}).dropna())
     if len(h1) < 50:
         return False
     regime = classify_regime(h1)
@@ -88,10 +97,19 @@ def run_backtest(df15: pd.DataFrame, strategy, symbol: str,
     trades: list[BtTrade] = []
     position: dict | None = None
 
+    # Resample to hourly ONCE over the full history, so the higher-timeframe
+    # EMAs converge (a 900-bar 15-min window only holds ~235 hourly bars —
+    # far too few for a 200-EMA). Per step we slice out the COMPLETED bars
+    # only (see _H1_COMPLETE_LAG), which also removes the per-step resample
+    # that made the old loop O(n^2).
+    h1_full = df15.resample("1h").agg(_H1_AGG).dropna()
+
     for i in range(WARMUP, len(df15)):
         window = df15.iloc[max(0, i - lookback): i + 1]
-        now = df15.index[i].to_pydatetime()
+        ts_i = df15.index[i]
+        now = ts_i.to_pydatetime()
         bar = df15.iloc[i]
+        h1 = h1_full[h1_full.index <= ts_i - _H1_COMPLETE_LAG]
 
         if position is not None:
             is_long = position["side"] == "BUY"
@@ -112,7 +130,7 @@ def run_backtest(df15: pd.DataFrame, strategy, symbol: str,
                 # session end: hold only when the trend earns it (same
                 # rule the live engine applies at 23:15)
                 if not _bt_may_hold(symbol, position, float(bar["close"]),
-                                    window):
+                                    h1):
                     exit_price, reason = float(bar["close"]), "SQUAREOFF"
 
             if reason:
@@ -129,10 +147,8 @@ def run_backtest(df15: pd.DataFrame, strategy, symbol: str,
                 position = None
             continue
 
-        # flat: look for an entry (same regime gate as live)
-        h1 = (window.resample("1h")
-              .agg({"open": "first", "high": "max", "low": "min",
-                    "close": "last", "volume": "sum"}).dropna())
+        # flat: look for an entry (same regime gate as live: regime on the
+        # 15-min window, higher-timeframe context from the completed h1)
         regime = classify_regime(window)
         signal = strategy.generate(window, h1, regime, now)
         if signal.action not in ("BUY", "SELL"):

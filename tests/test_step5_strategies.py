@@ -125,21 +125,41 @@ def test_orb_respects_time_window():
 
 def test_ema_cross_fires_buy():
     from core.indicators import ema
-    closes = np.concatenate([np.linspace(120, 100, 260),
-                             np.linspace(100, 118, 120)])
+    # >=600 bars so EMA-200 is converged (adjust=False warmup); long
+    # decline puts EMA50 below EMA200, then a rally crosses it up.
+    closes = np.concatenate([np.linspace(140, 100, 560),
+                             np.linspace(100, 135, 160)])
     df = _frame(closes)
     diff = ema(df["close"], 50) - ema(df["close"], 200)
     cross = np.where((diff.shift(1) <= 0) & (diff > 0))[0]
     df1h = df.iloc[: cross[-1] + 1]
+    assert len(df1h) >= 600
     sig = EmaTrendStrategy().generate(df1h, df1h, TRENDING, NOW)
     assert sig.action == "BUY"
     assert "cross" in sig.reason
 
 
 def test_ema_no_cross_holds():
-    df = _frame(np.linspace(100, 140, 260))
+    df = _frame(np.linspace(100, 160, 650))   # monotone: no cross
     sig = EmaTrendStrategy().generate(df, df, TRENDING, NOW)
     assert sig.action == "HOLD"
+    assert "cross" in sig.reason           # held on no-cross, not warmup
+
+
+def test_ema_holds_until_converged():
+    """A crossing computed off too-few bars is a seed artifact, not a real
+    signal — the strategy must refuse it (2026-07-24 GOLD zero-trades)."""
+    from core.indicators import ema
+    closes = np.concatenate([np.linspace(140, 100, 560),
+                             np.linspace(100, 135, 160)])
+    df = _frame(closes)
+    diff = ema(df["close"], 50) - ema(df["close"], 200)
+    cross = np.where((diff.shift(1) <= 0) & (diff > 0))[0][-1]
+    # Same crossing bar, but only the trailing 400 bars visible (< 3x200):
+    short = df.iloc[cross + 1 - 400: cross + 1]
+    sig = EmaTrendStrategy().generate(short, short, TRENDING, NOW)
+    assert sig.action == "HOLD"
+    assert "warmup" in sig.reason and "converge" in sig.reason
 
 
 # ------------------------------------------------------- momentum breakout

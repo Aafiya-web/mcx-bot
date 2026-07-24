@@ -18,9 +18,17 @@ class EmaTrendStrategy(Strategy):
     def generate(self, df15: pd.DataFrame, df1h: pd.DataFrame,
                  regime, now: datetime) -> Signal:
         df = df1h  # this strategy trades the higher timeframe
-        if len(df) < self.slow + 2:
+        # ema() uses ewm(adjust=False), seeded with the first bar, so the
+        # EMA-slow is only trustworthy after ~3x its span (seed weight
+        # (1-2/(slow+1))^n < ~0.25% at 3x). Below that the crossing is an
+        # artifact of the seed, not the market — refuse rather than emit a
+        # phantom signal (root cause of the 2026-07-24 GOLD zero-trades).
+        min_bars = self.slow * 3
+        if len(df) < min_bars:
             return Signal.hold(self.name,
-                               f"warmup: need {self.slow + 2}+ 1H bars")
+                               f"warmup: need {min_bars}+ 1H bars "
+                               f"for EMA{self.slow} to converge "
+                               f"(have {len(df)})")
 
         diff = ind.ema(df["close"], self.fast) - ind.ema(df["close"], self.slow)
         prev, curr = float(diff.iloc[-2]), float(diff.iloc[-1])

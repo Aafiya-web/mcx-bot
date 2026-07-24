@@ -36,6 +36,15 @@ from agents.base import DecisionContext
 
 logger = logging.getLogger(__name__)
 
+# Hourly-history depth for strategies that trade the 1H timeframe. A
+# 200-period EMA uses ewm(adjust=False), which is seeded with the first
+# bar and only converges after ~3-5x its span: at 210 bars ~10% of the
+# EMA-200 is still the arbitrary seed, so real 50/200 crossings were
+# missed entirely (diagnosed 2026-07-24 — GOLD backtest showed 0 trades
+# across 16 genuine crossings). 1000 bars puts seed contamination well
+# under 1%. Supertrend(10) on 1H is unaffected — it just ignores the depth.
+H1_HISTORY = 1000
+
 
 class Engine:
     def __init__(self, feed, order_manager, db_path=None,
@@ -258,7 +267,7 @@ class Engine:
             return False, (f"profit {r_now:+.2f}R < "
                            f"{settings.OVERNIGHT_MIN_R}R cushion")
 
-        df1h = self.feed.get_candles(pos["symbol"], "ONE_HOUR", 210)
+        df1h = self.feed.get_candles(pos["symbol"], "ONE_HOUR", H1_HISTORY)
         if len(df1h) < 50:
             return False, "insufficient 1H history"
         regime = classify_regime(df1h)
@@ -344,7 +353,7 @@ class Engine:
         """Evaluate one instrument. Returns (position_opened, verdict) —
         the verdict feeds the dashboard's scanner panel."""
         df15 = self.feed.get_candles(symbol, "FIFTEEN_MINUTE", 200)
-        df1h = self.feed.get_candles(symbol, "ONE_HOUR", 210)
+        df1h = self.feed.get_candles(symbol, "ONE_HOUR", H1_HISTORY)
         if len(df15) < 50:
             return False, f"insufficient data ({len(df15)} bars)"
         regime = classify_regime(df15)

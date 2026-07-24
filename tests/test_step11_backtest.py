@@ -83,3 +83,49 @@ def test_report_contains_verdict():
     metrics["win_rate"] = 40.0
     assert "❌ NO-GO" in format_report("CRUDEOIL", "supertrend", metrics,
                                        500_000)
+
+
+def _gold_history_with_cross(sessions=170, seed=11):
+    """15-min GOLD bars whose hourly 50/200 EMA crosses AFTER the 3x200
+    convergence threshold (~600 hourly bars). Long decline, then rally: the
+    death->golden cross must land past bar 600 or the strategy (correctly)
+    holds on warmup. ~34 contiguous bars/'session' -> 1 hourly bar per 4."""
+    import numpy as np
+    import pandas as pd
+    per = 34
+    n = sessions * per                       # ~5780 15-min -> ~1445 hourly
+    turn = int(n * 0.62)                     # cross lands well past hourly 600
+    base = np.concatenate([np.linspace(152000, 146000, turn),
+                           np.linspace(146000, 158000, n - turn)])
+    close = pd.Series(base, index=pd.date_range(
+        "2026-03-01 09:00", periods=n, freq="15min"))
+    return pd.DataFrame({"open": close.shift(1).fillna(close.iloc[0]),
+                         "high": close + 30, "low": close - 30,
+                         "close": close, "volume": 500.0})
+
+
+def test_hourly_strategy_detects_cross_after_convergence_fix():
+    """Regression for the 2026-07-24 bug: GOLD (ema_trend, 1H) generated
+    ZERO trades over 180 days because the per-step window never held enough
+    hourly bars for the EMA-200 to converge. With the full-history 1H
+    precompute, a real crossing must now produce at least one trade."""
+    df = _gold_history_with_cross()
+    trades = run_backtest(df, get_strategy("ema_trend"), "GOLDM",
+                          capital=5_000_000.0)   # big cap so sizing allows it
+    assert not trades.empty, "converged EMA must find the crossing"
+
+
+def test_backtest_h1_gate_has_no_lookahead():
+    """The hourly series handed to the strategy at bar i must never contain
+    a bar that has not fully completed by then."""
+    import pandas as pd
+    from backtest.engine import _H1_AGG, _H1_COMPLETE_LAG
+    df = _gold_history_with_cross(sessions=30)
+    h1_full = df.resample("1h").agg(_H1_AGG).dropna()
+    for i in (100, 300, 600, len(df) - 1):
+        ts_i = df.index[i]
+        h1 = h1_full[h1_full.index <= ts_i - _H1_COMPLETE_LAG]
+        if len(h1):
+            # last visible hourly bar must have fully closed by bar i's close
+            assert h1.index[-1] + pd.Timedelta(hours=1) <= \
+                ts_i + pd.Timedelta(minutes=15)

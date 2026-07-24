@@ -80,21 +80,32 @@ def test_lookback_for_timeframes():
     assert lookback_for("FIFTEEN_MINUTE") == LOOKBACK
 
 
-def test_hourly_window_clears_ema_warmup():
+def test_ema_warmup_needs_true_convergence_depth():
+    """SUPERSEDES the old L3 assumption. A 900-bar 15-min window resamples
+    to only ~234 hourly bars, which is NOT enough for the adjust=False
+    EMA-200 to converge (2026-07-24: this shortfall silently missed every
+    real GOLD crossing). The strategy must HOLD on warmup here, and only
+    evaluate once fed ~3x200 completed hourly bars."""
+    from core.regime import Regime
     from data.feed import _synth_ohlcv
     from strategies.ema_trend import EmaTrendStrategy
-    df = _synth_ohlcv(72000.0, 1000, seed=9)
-    window = df.tail(901)
-    h1 = (window.resample("1h")
-          .agg({"open": "first", "high": "max", "low": "min",
-                "close": "last", "volume": "sum"}).dropna())
-    assert len(h1) >= 202                       # EMA-200 warmup satisfied
-    from core.regime import Regime
+    agg = {"open": "first", "high": "max", "low": "min",
+           "close": "last", "volume": "sum"}
     trending = Regime("TRENDING", "BULLISH", 30, 25, 10, 5, 0.8, 2.5,
                       "x", True)
-    sig = EmaTrendStrategy().generate(window, h1, trending,
-                                      datetime(2026, 7, 6, 15, 0))
-    assert "warmup" not in sig.reason           # it can actually evaluate
+    now = datetime(2026, 7, 6, 15, 0)
+
+    short_h1 = _synth_ohlcv(72000.0, 1000, seed=9).tail(901).resample(
+        "1h").agg(agg).dropna()
+    assert len(short_h1) < 600                          # ~234 bars
+    sig = EmaTrendStrategy().generate(short_h1, short_h1, trending, now)
+    assert "warmup" in sig.reason                       # refuses, correctly
+
+    deep_h1 = _synth_ohlcv(72000.0, 4000, seed=9).resample(
+        "1h").agg(agg).dropna()
+    assert len(deep_h1) >= 600
+    sig = EmaTrendStrategy().generate(deep_h1, deep_h1, trending, now)
+    assert "warmup" not in sig.reason                   # now it evaluates
 
 
 # --------------------------------- L4: backstop beat-the-monitor race
