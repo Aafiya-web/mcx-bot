@@ -17,7 +17,7 @@ Kill switches honored every tick, in order of severity:
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config import settings
 from config.symbols import ACTIVE_SYMBOLS, INSTRUMENTS, POINT_VALUES, \
@@ -126,6 +126,7 @@ class Engine:
             except Exception as exc:
                 logger.error("backstop refresh failed: %s", exc)
                 telegram.send_error("backstop refresh", str(exc))
+            self._lift_expired_cooldowns(now)
 
         # 1. Manage what's open: stops fire here, on time, every tick.
         for ev in self.monitor.check():
@@ -297,6 +298,45 @@ class Engine:
             + (f" | slip {ev.slippage_pct:.2f}%"
                if ev.exit_reason == "STOP_LOSS" else ""))
         self._watch_exit_detail(ev)
+        self._check_loss_streak(ev)
+
+    def _check_loss_streak(self, ev) -> None:
+        """Bench an instrument after LOSS_STREAK_LIMIT consecutive losing
+        closes (cross-day complement to the intraday account-wide veto).
+        Enforced at the scan level like the manual pause; auto-lifts in
+        daily maintenance. A win breaks the streak (window not all-loss)."""
+        limit = settings.LOSS_STREAK_LIMIT
+        if limit <= 0:
+            return
+        recent = models.recent_closed_pnls(ev.symbol, limit, self.db)
+        if len(recent) < limit or not all(p < 0 for p in recent):
+            return
+        base = base_of(ev.symbol)
+        if models.get_state(f"symbol_cooldown:{base}", "", self.db):
+            return  # already benched
+        now = datetime.now()
+        until = (now.date()
+                 + timedelta(days=settings.LOSS_STREAK_COOLDOWN_DAYS))
+        models.set_state(f"symbol_cooldown:{base}", until.isoformat(),
+                         self.db)
+        reason = (f"{limit} consecutive losing closes — benched until "
+                  f"{until.isoformat()}")
+        models.log_decision("system", ev.symbol, "system", "COOLDOWN",
+                            reason, db_path=self.db)
+        telegram.send_message(f"🧊 <b>COOLDOWN {base}</b>\n{reason}")
+        logger.warning("Loss-streak cooldown: %s benched until %s",
+                       base, until.isoformat())
+
+    def _lift_expired_cooldowns(self, now: datetime) -> None:
+        for base in self.symbols:
+            until = models.get_state(f"symbol_cooldown:{base}", "", self.db)
+            if until and now.date().isoformat() >= until:
+                models.set_state(f"symbol_cooldown:{base}", "", self.db)
+                models.log_decision("system", base, "system", "RESUME",
+                                    "loss-streak cooldown expired",
+                                    db_path=self.db)
+                telegram.send_message(f"▶️ <b>{base} cooldown lifted</b>")
+                logger.info("Loss-streak cooldown lifted: %s", base)
 
     # ------------------------------------------------------------ entries
 
@@ -322,6 +362,15 @@ class Engine:
             if pause_reason:
                 snapshot.append({"symbol": symbol,
                                  "status": f"paused: {pause_reason}"})
+                continue
+
+            # Auto loss-streak cooldown: benched after N consecutive losing
+            # closes on this instrument, auto-lifted in daily maintenance.
+            until = models.get_state(f"symbol_cooldown:{base}", "", self.db)
+            if until and now.date().isoformat() < until:
+                snapshot.append({
+                    "symbol": symbol,
+                    "status": f"cooldown: loss streak, benched until {until}"})
                 continue
 
             try:

@@ -307,6 +307,22 @@ test in the step they belong to.
 | `FINNHUB_API_KEY` | empty | Economic calendar source; empty = static weekly fallback |
 | `POSITIONAL_SYMBOLS` | GOLD,COPPER | Base symbols allowed to hold overnight when eligible (L16); empty = fully intraday |
 | `OVERNIGHT_MIN_R` | 0.5 | Open profit (R multiples) required before an overnight hold — the gap-risk cushion |
+| `LOSS_STREAK_LIMIT` | 3 | Consecutive losing closes on ONE instrument that bench it; 0 = off |
+| `LOSS_STREAK_COOLDOWN_DAYS` | 2 | Calendar days an instrument stays benched after a loss streak |
+
+**Loss-streak cooldown (risk-tightening, added 2026-08).** The intraday
+account-wide "3 consecutive losses → pause" in `agents/risk_team.py` resets
+each day, so a bleed spread across separate days never triggers it — which
+is exactly how NATGASMINI gave back a week of gains (big early wins, then
+−2909/−2440/−6616/−6236 over several days). This is the **cross-day,
+per-instrument** complement: `Engine._check_loss_streak` (on each close)
+benches an instrument via `bot_state` key `symbol_cooldown:<BASE>` after
+`LOSS_STREAK_LIMIT` consecutive losing closes; `_scan_for_entries` skips it
+(scanner panel shows `cooldown:`); daily maintenance auto-lifts it after
+`LOSS_STREAK_COOLDOWN_DAYS`. Other instruments keep trading; a win breaks
+the streak. Every bench/resume is a `decision_log` row (COOLDOWN/RESUME).
+It can only *reduce* trading — no ceiling loosened, no stop moved. The
+backtest walker (`backtest/engine.py`) mirrors it so gate results match live.
 
 Adaptation: ONLY params in `agents/reflection.py:PARAM_BOUNDS` can change, are
 clamped, and land in `param_changes` with old value + reason (rollback = set it

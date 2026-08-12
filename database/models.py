@@ -186,6 +186,18 @@ def get_open_positions(db_path: Path | str | None = None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def recent_closed_pnls(symbol: str, n: int,
+                       db_path: Path | str | None = None) -> list[float]:
+    """The last `n` CLOSED-trade P&Ls for a traded symbol, newest first.
+    Used by the per-instrument loss-streak cooldown."""
+    with _conn(db_path) as c:
+        rows = c.execute(
+            "SELECT pnl FROM trades WHERE symbol=? AND status='CLOSED' "
+            "ORDER BY exit_time DESC, id DESC LIMIT ?",
+            (symbol, n)).fetchall()
+    return [(r["pnl"] or 0.0) for r in rows]
+
+
 def update_stop(trade_id: int, new_sl: float,
                 db_path: Path | str | None = None) -> None:
     """Persist a (validated) stop move. Direction is enforced by the

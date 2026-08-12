@@ -123,6 +123,15 @@ MAX_POSITION_MARGIN_PCT = _float("MAX_POSITION_MARGIN_PCT", "30.0")
 MAX_CLUSTER_MARGIN_PCT = _float("MAX_CLUSTER_MARGIN_PCT", "50.0")
 ATR_SL_MULT = _float("ATR_SL_MULT", "1.5")
 
+# Per-instrument loss-streak cooldown (risk-tightening; the cross-day
+# complement to risk_team's intraday account-wide 3-loss veto). After
+# LOSS_STREAK_LIMIT consecutive LOSING closes on one instrument, that
+# instrument is benched for LOSS_STREAK_COOLDOWN_DAYS (others keep
+# trading; auto-resumes). 0 disables. Motivated by the 2026-08 NATGASMINI
+# multi-day bleed that the daily-reset counter never caught.
+LOSS_STREAK_LIMIT = _int("LOSS_STREAK_LIMIT", "3")
+LOSS_STREAK_COOLDOWN_DAYS = _int("LOSS_STREAK_COOLDOWN_DAYS", "2")
+
 # Bull score must beat bear score by this margin before the Trader agent
 # turns a debate into a proposal (agentic-layer sensitivity knob).
 AGENT_APPROVAL_MARGIN = _float("AGENT_APPROVAL_MARGIN", "1.0")

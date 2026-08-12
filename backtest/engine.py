@@ -96,6 +96,10 @@ def run_backtest(df15: pd.DataFrame, strategy, symbol: str,
     point_value = POINT_VALUES[symbol]
     trades: list[BtTrade] = []
     position: dict | None = None
+    # Mirror the live per-instrument loss-streak cooldown so backtest trade
+    # counts stay representative (0 disables — preserves prior behaviour).
+    streak = 0
+    cooldown_until = None   # pd.Timestamp; no new entries before this
 
     # Resample to hourly ONCE over the full history, so the higher-timeframe
     # EMAs converge (a 900-bar 15-min window only holds ~235 hourly bars —
@@ -145,6 +149,17 @@ def run_backtest(df15: pd.DataFrame, strategy, symbol: str,
                                       fill, reason, pnl,
                                       position["ts"], df15.index[i]))
                 position = None
+                # loss-streak cooldown (mirror of Engine._check_loss_streak)
+                if settings.LOSS_STREAK_LIMIT > 0:
+                    streak = streak + 1 if pnl < 0 else 0
+                    if streak >= settings.LOSS_STREAK_LIMIT:
+                        cooldown_until = df15.index[i] + pd.Timedelta(
+                            days=settings.LOSS_STREAK_COOLDOWN_DAYS)
+                        streak = 0
+            continue
+
+        # benched by the loss-streak cooldown — no new entries yet
+        if cooldown_until is not None and ts_i < cooldown_until:
             continue
 
         # flat: look for an entry (same regime gate as live: regime on the
